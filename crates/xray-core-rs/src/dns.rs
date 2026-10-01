@@ -218,6 +218,9 @@ impl RoutedDnsQueryTransport {
             .map_err(io::Error::other)?;
 
         match outbound {
+            UdpOutbound::Blackhole => {
+                return Err(io::Error::from(io::ErrorKind::ConnectionRefused));
+            }
             outbound @ (UdpOutbound::Hysteria(_) | UdpOutbound::Wireguard(_)) => {
                 if server_socket_has_nonzero_scope(server) {
                     return Err(io::Error::other(
@@ -427,6 +430,9 @@ impl RoutedDnsQueryTransport {
             .map_err(io::Error::other)?;
 
         Ok(match selected.outbound {
+            TcpOutbound::Blackhole => {
+                return Err(io::Error::from(io::ErrorKind::ConnectionRefused));
+            }
             outbound @ (TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_)) => {
                 let candidates = self.resolved_servers(server).await?;
                 open_routed_freedom_dns_tcp_stream(

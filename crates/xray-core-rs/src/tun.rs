@@ -2656,6 +2656,9 @@ async fn open_tcp_bridge_stream(
             .await?);
         }
         match outbound {
+            TcpOutbound::Blackhole => {
+                return Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into());
+            }
             TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => {
                 let candidates =
                     dns_proxy::resolve_freedom_dns_upstreams(upstream, context).await?;
@@ -2695,7 +2698,7 @@ async fn open_tcp_bridge_stream(
         }
     }
     let destination_resolver = match outbound.primary() {
-        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => {
+        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => {
             context.dns_resolver.as_ref()
         }
         TcpOutbound::Vless(_) | TcpOutbound::Hysteria(_) => context.bootstrap_dns_resolver(),
@@ -3057,7 +3060,7 @@ async fn bridge_tcp_flow_inner(
             TcpOutbound::Hysteria(_) | TcpOutbound::Wireguard(_) => {
                 effective_policy_for_level(&context.config, Some(0)).handshake
             }
-            TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => {
+            TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => {
                 context.inbound_policy.handshake
             }
             TcpOutbound::Vless(outbound) => {
@@ -4259,6 +4262,9 @@ async fn bridge_udp_flow(
     }
 
     match outbound {
+        UdpOutbound::Blackhole => {
+            return;
+        }
         outbound @ (UdpOutbound::Hysteria(_) | UdpOutbound::Wireguard(_)) => {
             datagram::bridge(
                 key,

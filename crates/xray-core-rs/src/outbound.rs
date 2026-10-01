@@ -337,6 +337,7 @@ pub enum TcpOutbound {
     Vless(Box<VlessTcpOutbound>),
     Hysteria(HysteriaOutbound),
     Wireguard(WireguardOutbound),
+    Blackhole,
     Chained {
         outbound: Box<TcpOutbound>,
         proxy: Box<TcpOutbound>,
@@ -355,6 +356,7 @@ pub enum UdpOutbound {
     Vless(Box<VlessTcpOutbound>),
     Hysteria(HysteriaOutbound),
     Wireguard(WireguardOutbound),
+    Blackhole,
 }
 
 /// One configured handler selected for a TCP session. DNS remains a message
@@ -592,7 +594,7 @@ impl TcpOutbound {
         match self.primary() {
             Self::Freedom => None,
             Self::FreedomHappyEyeballs(config) => Some(config),
-            Self::Vless(_) | Self::Hysteria(_) | Self::Wireguard(_) => None,
+            Self::Vless(_) | Self::Hysteria(_) | Self::Wireguard(_) | Self::Blackhole => None,
             Self::Chained { .. } => unreachable!("primary outbound is never a chain wrapper"),
         }
     }
@@ -614,6 +616,7 @@ impl ResolvedTcpConnector for OutboundProxyTcpConnector {
         happy_eyeballs: Option<&HappyEyeballsConfig>,
     ) -> Result<BoxedTransportStream, TransportError> {
         match self.outbound.primary() {
+            TcpOutbound::Blackhole => Err(TransportError::Tcp(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))),
             TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => {
                 self.transport_dialer
                     .connect_resolved(
@@ -678,7 +681,7 @@ fn prepare_outbound_proxy_dialer<'a>(
             TcpOutbound::Hysteria(_) => {
                 return Err(CoreError::UnsupportedOutboundProxyNetwork("Hysteria"))
             }
-            TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => Box::default(),
+            TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => Box::default(),
             TcpOutbound::Chained { .. } => {
                 unreachable!("a compiled chain wrapper has one plain primary outbound")
             }
@@ -696,7 +699,7 @@ fn prepare_outbound_proxy_dialer<'a>(
 
 fn proxy_chain_requires_local_resolution(proxy: &TcpOutbound) -> bool {
     match proxy.primary() {
-        TcpOutbound::Vless(_) | TcpOutbound::Hysteria(_) | TcpOutbound::Wireguard(_) => false,
+        TcpOutbound::Vless(_) | TcpOutbound::Hysteria(_) | TcpOutbound::Wireguard(_) | TcpOutbound::Blackhole => false,
         TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => match proxy {
             TcpOutbound::Chained { proxy, .. } => proxy_chain_requires_local_resolution(proxy),
             _ => true,
@@ -1002,7 +1005,7 @@ impl OutboundGraph {
                 },
                 tag: outbound.tag.clone(),
                 kind: match outbound.settings {
-                    OutboundSettings::Freedom => OutboundNodeKind::Freedom,
+                    OutboundSettings::Freedom | OutboundSettings::Blackhole => OutboundNodeKind::Freedom,
                     OutboundSettings::Vless(_) => OutboundNodeKind::Vless,
                     OutboundSettings::Hysteria(_) => OutboundNodeKind::Hysteria,
                     OutboundSettings::Wireguard(_) => OutboundNodeKind::Wireguard,
@@ -2803,6 +2806,7 @@ impl OutboundFactory {
                 .cached_wireguard_outbound(node)
                 .map(TcpOutbound::Wireguard),
             OutboundSettings::Dns(_) => Err(CachedOutboundError::NoSupportedOutbound),
+            OutboundSettings::Blackhole => Ok(TcpOutbound::Blackhole),
             OutboundSettings::Freedom => {
                 if !stream_transport_is_dialable(&outbound.stream) {
                     return Err(CachedOutboundError::UnsupportedOutboundNetwork);
@@ -2848,6 +2852,7 @@ impl OutboundFactory {
                 .cached_wireguard_outbound(node)
                 .map(UdpOutbound::Wireguard),
             OutboundSettings::Dns(_) => Err(CachedOutboundError::NoSupportedOutbound),
+            OutboundSettings::Blackhole => Ok(UdpOutbound::Blackhole),
             OutboundSettings::Freedom => {
                 if !stream_transport_is_dialable(&outbound.stream) {
                     return Err(CachedOutboundError::UnsupportedOutboundNetwork);
@@ -2889,7 +2894,8 @@ impl OutboundFactory {
             OutboundSettings::Freedom
             | OutboundSettings::Vless(_)
             | OutboundSettings::Hysteria(_)
-            | OutboundSettings::Wireguard(_) => Err(CachedOutboundError::NoSupportedOutbound),
+            | OutboundSettings::Wireguard(_)
+            | OutboundSettings::Blackhole => Err(CachedOutboundError::NoSupportedOutbound),
         }
     }
 }
@@ -3202,6 +3208,7 @@ fn build_tcp_outbound(outbound: &OutboundConfig) -> Result<TcpOutbound, CoreErro
             WireguardOutbound::new(outbound).map(TcpOutbound::Wireguard)
         }
         OutboundSettings::Dns(_) => Err(CoreError::NoSupportedOutbound),
+        OutboundSettings::Blackhole => Ok(TcpOutbound::Blackhole),
         OutboundSettings::Freedom => {
             if !stream_transport_is_dialable(&outbound.stream) {
                 return Err(CoreError::UnsupportedOutboundNetwork);
@@ -3224,6 +3231,7 @@ fn build_udp_outbound(outbound: &OutboundConfig) -> Result<UdpOutbound, CoreErro
             WireguardOutbound::new(outbound).map(UdpOutbound::Wireguard)
         }
         OutboundSettings::Dns(_) => Err(CoreError::NoSupportedOutbound),
+        OutboundSettings::Blackhole => Ok(UdpOutbound::Blackhole),
         OutboundSettings::Freedom => {
             if !stream_transport_is_dialable(&outbound.stream) {
                 return Err(CoreError::UnsupportedOutboundNetwork);
@@ -3522,6 +3530,9 @@ async fn open_plain_tcp_stream_with_resolvers_and_dialer(
     requires_local_resolution: bool,
 ) -> Result<BoxedTransportStream, CoreError> {
     match outbound {
+        TcpOutbound::Blackhole => {
+            return Err(TransportError::Tcp(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)).into());
+        }
         TcpOutbound::Wireguard(outbound) => {
             // Cold protocol setup contains large async state. Keep it out of
             // every TCP task, including long-lived Freedom/VLESS connections.

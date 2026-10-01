@@ -545,6 +545,7 @@ pub enum OutboundProtocol {
     Vless,
     Hysteria,
     Wireguard,
+    Blackhole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +555,7 @@ pub enum OutboundSettings {
     Vless(VlessOutboundSettings),
     Hysteria(HysteriaOutboundSettings),
     Wireguard(WireguardOutboundSettings),
+    Blackhole,
 }
 
 impl OutboundSettings {
@@ -564,6 +566,7 @@ impl OutboundSettings {
             Self::Vless(_) => OutboundProtocol::Vless,
             Self::Hysteria(_) => OutboundProtocol::Hysteria,
             Self::Wireguard(_) => OutboundProtocol::Wireguard,
+            Self::Blackhole => OutboundProtocol::Blackhole,
         }
     }
 }

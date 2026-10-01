@@ -40,6 +40,7 @@ const STREAM_WINDOW_SIZE: u32 = DEFAULT_H2_STREAM_RECEIVE_WINDOW;
 /// At the 4 MiB default, three full unread responses leave a complete stream
 /// window for other traffic. Four can exhaust it until a consumer reads or cancels;
 /// this is not an RSS bound (TLS, framing and application buffers add to it).
+#[allow(dead_code)]
 const CONNECTION_WINDOW_SIZE: u32 = H2_CONNECTION_RECEIVE_WINDOW;
 
 /// Bounds the copy made by one [`AsyncWrite::poll_write`] call.
@@ -245,10 +246,11 @@ pub async fn connect_h2_with_receive_window(
 
     let read_idle = read_idle.filter(|duration| !duration.is_zero());
     let (io, last_read) = WatchedIo::new(io, read_idle.is_some());
+    let conn_window = (stream_receive_window.saturating_mul(2)).clamp(131_072, 2 * 1024 * 1024);
     let mut builder = client::Builder::new();
     builder
         .initial_window_size(stream_receive_window)
-        .initial_connection_window_size(CONNECTION_WINDOW_SIZE)
+        .initial_connection_window_size(conn_window)
         .initial_max_send_streams(1);
     let (send_request, mut connection) = builder
         .handshake::<_, Bytes>(io)

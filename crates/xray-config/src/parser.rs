@@ -932,6 +932,7 @@ impl Parser<'_> {
             Some("vless") => OutboundProtocol::Vless,
             Some("hysteria") => OutboundProtocol::Hysteria,
             Some("wireguard") => OutboundProtocol::Wireguard,
+            Some("blackhole") => OutboundProtocol::Blackhole,
             Some(protocol) => {
                 self.error(
                     protocol_path,
@@ -963,6 +964,9 @@ impl Parser<'_> {
             OutboundProtocol::Vless => {
                 OutboundSettings::Vless(self.parse_vless_settings(outbound, index)?)
             }
+            OutboundProtocol::Blackhole => {
+                OutboundSettings::Blackhole
+            }
         };
         let stream = self.parse_stream_settings(outbound, index)?;
         let proxy_settings = self.parse_outbound_proxy_settings(outbound, index);
@@ -992,7 +996,8 @@ impl Parser<'_> {
             OutboundSettings::Freedom
             | OutboundSettings::Dns(_)
             | OutboundSettings::Hysteria(_)
-            | OutboundSettings::Wireguard(_) => false,
+            | OutboundSettings::Wireguard(_)
+            | OutboundSettings::Blackhole => false,
         };
         if rejects_plaintext_server {
             self.error(

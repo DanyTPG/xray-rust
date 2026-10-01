@@ -1,5 +1,6 @@
 use libc::c_int;
 
+#[allow(dead_code)]
 const MAX_IP_PACKET_SIZE: usize = 65_535;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3263,7 +3263,7 @@ async fn open_raw_dns_tcp_candidate(
         TcpOutbound::Hysteria(_) | TcpOutbound::Wireguard(_) => {
             effective_policy_for_level(&context.config, Some(0)).handshake
         }
-        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => {
+        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => {
             context.inbound_policy.handshake
         }
         TcpOutbound::Vless(outbound) => {
@@ -3504,7 +3504,7 @@ async fn proxy_udp_payload(
                     continue;
                 };
                 let outbound_timeout = match &outbound {
-                    UdpOutbound::Freedom => DNS_PROXY_FREEDOM_ATTEMPT_TIMEOUT,
+                    UdpOutbound::Freedom | UdpOutbound::Blackhole => DNS_PROXY_FREEDOM_ATTEMPT_TIMEOUT,
                     UdpOutbound::Vless(_)
                     | UdpOutbound::Hysteria(_)
                     | UdpOutbound::Wireguard(_) => DNS_PROXY_VLESS_ATTEMPT_TIMEOUT,
@@ -3925,6 +3925,9 @@ async fn exchange_udp_candidate(
     failure_phase: &mut DnsUdpFailurePhase,
 ) -> Result<DnsUpstreamResponse, crate::CoreError> {
     let response = match outbound {
+        UdpOutbound::Blackhole => {
+            return Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into());
+        }
         outbound @ (UdpOutbound::Hysteria(_) | UdpOutbound::Wireguard(_)) => {
             if upstream
                 .socket_addr()
@@ -3967,6 +3970,7 @@ async fn exchange_udp_candidate(
                     prefix: Bytes::copy_from_slice(&reply.payload[..prefix_len]),
                 }
             }
+        }
         }
         UdpOutbound::Freedom => {
             let upstream = resolve_freedom_dns_upstream(upstream, context).await?;

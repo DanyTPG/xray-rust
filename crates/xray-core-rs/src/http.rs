@@ -215,7 +215,7 @@ async fn handle_http_connection(
     };
 
     let (open_timeout, tunnel_idle, relay_buffer_size) = match outbound.primary() {
-        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => (
+        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => (
             policy.handshake,
             policy.conn_idle,
             policy.relay_buffer_size(),

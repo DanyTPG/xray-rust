@@ -1,4 +1,5 @@
 mod config;
+pub mod redir;
 
 pub use config::ConfigCommand;
 
@@ -367,6 +368,39 @@ where
     if !bound.is_empty() {
         eprintln!("{}", format_bound_inbounds(&bound));
     }
+
+    let socks_addr = bound
+        .iter()
+        .find(|(tag, _)| tag.as_deref() == Some("socks-in"))
+        .or_else(|| bound.first())
+        .map(|(_, addr)| *addr);
+
+    let redir_port = env::var("XRAY_REDIR_PORT")
+        .or_else(|_| env::var("xray.redir.port"))
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+
+    let dns_port = env::var("XRAY_DNS_PORT")
+        .or_else(|_| env::var("xray.dns.port"))
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+
+    if let (Some(port), Some(socks)) = (redir_port, socks_addr) {
+        tokio::spawn(async move {
+            if let Err(e) = redir::start_redir_loop(port, socks).await {
+                eprintln!("transparent redirect error: {e}");
+            }
+        });
+    }
+
+    if let (Some(port), Some(socks)) = (dns_port, socks_addr) {
+        tokio::spawn(async move {
+            if let Err(e) = redir::start_dns_forwarder(port, socks).await {
+                eprintln!("clean dns forwarder error: {e}");
+            }
+        });
+    }
+
     shutdown.await;
     if let Some(runtime) = tun_fd_runtime.take() {
         runtime.stop().await;

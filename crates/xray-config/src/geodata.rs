@@ -422,6 +422,14 @@ fn open_file_beneath(root: &Path, requested: &Path) -> io::Result<File> {
 
 pub(crate) fn default_geodata_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if let Ok(asset) = std::env::var("XRAY_LOCATION_ASSET") {
+        dirs.push(PathBuf::from(asset));
+    }
+    if let Ok(asset) = std::env::var("xray.location.asset") {
+        dirs.push(PathBuf::from(asset));
+    }
+    dirs.push(PathBuf::from("/usr/share/xray"));
+    dirs.push(PathBuf::from("/usr/share/v2ray"));
     if let Ok(cwd) = std::env::current_dir() {
         dirs.push(cwd);
     }

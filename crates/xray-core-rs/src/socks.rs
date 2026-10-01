@@ -452,7 +452,7 @@ async fn handle_socks_connect(
     };
 
     let (open_timeout, tunnel_idle, relay_buffer_size) = match outbound.primary() {
-        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) => (
+        TcpOutbound::Freedom | TcpOutbound::FreedomHappyEyeballs(_) | TcpOutbound::Blackhole => (
             policy.handshake,
             policy.conn_idle,
             policy.relay_buffer_size(),
@@ -993,6 +993,9 @@ async fn bridge_socks_udp_flow(
     };
 
     match outbound {
+        UdpOutbound::Blackhole => {
+            return;
+        }
         outbound @ (UdpOutbound::Hysteria(_) | UdpOutbound::Wireguard(_)) => {
             datagram::bridge(
                 dial_target,
