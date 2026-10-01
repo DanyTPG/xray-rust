@@ -77,7 +77,7 @@ jobs:
 
       - name: Package binary and UPX compression
         run: |
-          OUT_DIR="stage"
+          OUT_DIR="dist"
           rm -rf "$OUT_DIR"
           mkdir -p "$OUT_DIR"
 
@@ -87,15 +87,15 @@ jobs:
           fi
 
           if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
-            cp "$BIN_PATH" "$OUT_DIR/xray-rust"
-            cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
-            upx --best "$OUT_DIR/xray-rust-upx" || true
+            STD_NAME="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}"
+            UPX_NAME="xray-rust-upx_${{ steps.ver.outputs.version }}_${{ matrix.arch }}"
+
+            cp "$BIN_PATH" "$OUT_DIR/$STD_NAME"
+            cp "$BIN_PATH" "$OUT_DIR/$UPX_NAME"
+            upx --best "$OUT_DIR/$UPX_NAME" || true
             chmod +x "$OUT_DIR"/*
 
-            ARCHIVE="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
-            tar -czf "$ARCHIVE" -C "$OUT_DIR" .
-            sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
-            ls -lh "$ARCHIVE"
+            ls -lh "$OUT_DIR"
           else
             echo "ERROR: Could not find xray-rust binary for ${{ matrix.target }}!"
             exit 1
@@ -105,9 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}
-          path: |
-            xray-rust_*.tar.gz
-            xray-rust_*.sha256
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -129,10 +127,10 @@ jobs:
       - name: Compute unified checksums
         run: |
           mkdir -p release_assets
-          find downloaded -type f -name "*.tar.gz" -exec cp -v {} release_assets/ \;
+          find downloaded -type f ! -name "*checksum*" ! -name "SHA256SUMS*" -exec cp -v {} release_assets/ \;
           cd release_assets
           ls -la
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish to GitHub Release
@@ -143,12 +141,14 @@ jobs:
           echo "=== Release Assets ==="
           ls -la release_assets/
           if gh release view "${{ github.ref_name }}" -R "$GH_REPO" >/dev/null 2>&1; then
-            echo "Release ${{ github.ref_name }} exists, uploading assets..."
+            echo "Release ${{ github.ref_name }} exists, uploading assets and publishing..."
             gh release upload "${{ github.ref_name }}" release_assets/* -R "$GH_REPO" --clobber
+            gh release edit "${{ github.ref_name }}" -R "$GH_REPO" --draft=false
           else
-            echo "Creating release ${{ github.ref_name }}..."
+            echo "Creating published release ${{ github.ref_name }}..."
             gh release create "${{ github.ref_name }}" release_assets/* \
               -R "$GH_REPO" \
               --title "${{ github.ref_name }}" \
-              --notes "LiteWall Xray-Rust multi-architecture release for OpenWrt"
+              --notes "LiteWall Xray-Rust multi-architecture release for OpenWrt" \
+              --draft=false
           fi
