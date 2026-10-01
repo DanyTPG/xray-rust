@@ -90,33 +90,42 @@ jobs:
 
       - name: Package binary and UPX compression
         run: |
-          set -x
-          OUT_DIR="stage"
-          rm -rf "$OUT_DIR"
-          mkdir -p "$OUT_DIR"
+          {
+            set -x
+            echo "=== Target Directory ==="
+            find target -type f -name "xray-rust*" || true
 
-          # Find compiled binary
-          BIN_PATH=$(find target -name "xray-rust" -type f 2>/dev/null | grep -E "release/xray-rust$" | head -n 1)
-          if [ -z "$BIN_PATH" ] || [ ! -f "$BIN_PATH" ]; then
-            BIN_PATH="target/${{ matrix.target }}/release/xray-rust"
-          fi
-          echo "Found binary at: $BIN_PATH"
-          ls -lh "$BIN_PATH"
+            OUT_DIR="stage"
+            rm -rf "$OUT_DIR"
+            mkdir -p "$OUT_DIR"
 
-          # 1. Standard stripped binary
-          cp "$BIN_PATH" "$OUT_DIR/xray-rust"
-          chmod +x "$OUT_DIR/xray-rust"
+            BIN_PATH=$(find target -name "xray-rust" -type f 2>/dev/null | grep -E "release/xray-rust$" | head -n 1)
+            echo "Selected BIN_PATH: '$BIN_PATH'"
 
-          # 2. UPX compressed binary (in-place compression with safe fallback)
-          cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
-          upx --best "$OUT_DIR/xray-rust-upx" || echo "UPX compression skipped or unsupported on ${{ matrix.target }}"
-          chmod +x "$OUT_DIR/xray-rust-upx"
+            if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
+              cp "$BIN_PATH" "$OUT_DIR/xray-rust"
+              cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
+              upx --best "$OUT_DIR/xray-rust-upx" || true
+              chmod +x "$OUT_DIR"/*
 
-          # 3. Create tarball archive
-          ARCHIVE_NAME="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
-          tar -czf "$ARCHIVE_NAME" -C "$OUT_DIR" xray-rust xray-rust-upx
-          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
-          ls -lh "$ARCHIVE_NAME"
+              ARCHIVE="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
+              tar -czf "$ARCHIVE" -C "$OUT_DIR" .
+              sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+              ls -lh "$ARCHIVE"
+            else
+              echo "ERROR: Could not find xray-rust binary!"
+              find target -type f || true
+              exit 1
+            fi
+          } 2>&1 | tee package.log
+
+      - name: Capture packaging log on failure
+        if: failure()
+        run: |
+          echo "### Packaging failure log for ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat package.log >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
