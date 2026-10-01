@@ -1,0 +1,142 @@
+name: Build and Release xray-rust
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            arch: linux-arm64
+            desc: "ARM64 (Cortex-A53/A72, RPi 4/5, MT798x)"
+          - target: armv7-unknown-linux-musleabihf
+            arch: linux-armv7
+            desc: "ARMv7 hard-float (Cortex-A7/A9, IPQ40xx, BCM4709)"
+          - target: x86_64-unknown-linux-musl
+            arch: linux-x86_64
+            desc: "x86_64 (64-bit Mini-PC, Soft router)"
+          - target: i686-unknown-linux-musl
+            arch: linux-x86_32
+            desc: "x86 32-bit (Legacy PC)"
+          - target: arm-unknown-linux-musleabi
+            arch: linux-armv5
+            desc: "ARMv5/v6 soft-float (Legacy ARM)"
+          - target: mipsel-unknown-linux-musl
+            arch: linux-mipsel
+            desc: "MIPS 32-bit Little Endian (MT7621, MT7628, MT7620)"
+            experimental: true
+          - target: mips-unknown-linux-musl
+            arch: linux-mips
+            desc: "MIPS 32-bit Big Endian (QCA95xx, AR71xx)"
+            experimental: true
+          - target: riscv64gc-unknown-linux-musl
+            arch: linux-riscv64
+            desc: "RISC-V 64-bit"
+            experimental: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V=$(date +'%y.%m.%d')
+          fi
+          echo "version=${V}" >> $GITHUB_OUTPUT
+          echo "Building version ${V} for ${{ matrix.target }}"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross and upx
+        run: |
+          curl -sSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin
+          sudo apt-get update && sudo apt-get install -y upx-ucl
+
+      - name: Cross-compile binary
+        run: |
+          cross build --package xray-cli --bin xray-rust --release --target ${{ matrix.target }}
+
+      - name: Package binary and UPX compression
+        run: |
+          OUT_DIR="stage"
+          BIN_PATH="target/${{ matrix.target }}/release/xray-rust"
+          rm -rf "$OUT_DIR"
+          mkdir -p "$OUT_DIR"
+
+          # 1. Standard stripped binary
+          cp "$BIN_PATH" "$OUT_DIR/xray-rust"
+          chmod +x "$OUT_DIR/xray-rust"
+
+          # 2. UPX compressed binary (for flash-constrained routers)
+          if upx --best -o "$OUT_DIR/xray-rust-upx" "$BIN_PATH" >/dev/null 2>&1; then
+            chmod +x "$OUT_DIR/xray-rust-upx"
+            echo "UPX compression succeeded"
+          else
+            echo "UPX unsupported on ${{ matrix.target }}; copying standard binary as fallback"
+            cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
+          fi
+
+          # 3. Create tarball archive
+          ARCHIVE_NAME="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
+          tar -czf "$ARCHIVE_NAME" -C "$OUT_DIR" xray-rust xray-rust-upx
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          ls -lh "$ARCHIVE_NAME"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}
+          path: |
+            xray-rust_*.tar.gz
+            xray-rust_*.sha256
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Compute unified checksums
+        run: |
+          cd release_assets
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/*.tar.gz
+            release_assets/SHA256SUMS
+          generate_release_notes: true
