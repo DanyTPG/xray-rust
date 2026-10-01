@@ -3971,7 +3971,6 @@ async fn exchange_udp_candidate(
                 }
             }
         }
-        }
         UdpOutbound::Freedom => {
             let upstream = resolve_freedom_dns_upstream(upstream, context).await?;
             exchange_udp_freedom(upstream, query, max_payload, context, failure_phase).await?

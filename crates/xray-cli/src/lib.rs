@@ -1,6 +1,29 @@
 mod config;
 pub mod redir;
 
+#[cfg(target_arch = "arm")]
+mod soft_float_compat {
+    #[no_mangle]
+    pub extern "C" fn fminimum_num(x: f64, y: f64) -> f64 {
+        if x.is_nan() { y } else if y.is_nan() { x } else if x < y { x } else { y }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn fmaximum_num(x: f64, y: f64) -> f64 {
+        if x.is_nan() { y } else if y.is_nan() { x } else if x > y { x } else { y }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn fminimum_numf(x: f32, y: f32) -> f32 {
+        if x.is_nan() { y } else if y.is_nan() { x } else if x < y { x } else { y }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn fmaximum_numf(x: f32, y: f32) -> f32 {
+        if x.is_nan() { y } else if y.is_nan() { x } else if x > y { x } else { y }
+    }
+}
+
 pub use config::ConfigCommand;
 
 use std::{
