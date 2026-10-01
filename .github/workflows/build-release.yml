@@ -87,8 +87,8 @@ jobs:
           fi
 
           if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
-            STD_NAME="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}"
-            UPX_NAME="xray-rust-upx_${{ steps.ver.outputs.version }}_${{ matrix.arch }}"
+            STD_NAME="xray-rust_${{ matrix.arch }}"
+            UPX_NAME="xray-rust-upx_${{ matrix.arch }}"
 
             cp "$BIN_PATH" "$OUT_DIR/$STD_NAME"
             cp "$BIN_PATH" "$OUT_DIR/$UPX_NAME"
@@ -104,7 +104,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}
+          name: xray-rust_${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -141,14 +141,12 @@ jobs:
           echo "=== Release Assets ==="
           ls -la release_assets/
           if gh release view "${{ github.ref_name }}" -R "$GH_REPO" >/dev/null 2>&1; then
-            echo "Release ${{ github.ref_name }} exists, uploading assets and publishing..."
-            gh release upload "${{ github.ref_name }}" release_assets/* -R "$GH_REPO" --clobber
-            gh release edit "${{ github.ref_name }}" -R "$GH_REPO" --draft=false
-          else
-            echo "Creating published release ${{ github.ref_name }}..."
-            gh release create "${{ github.ref_name }}" release_assets/* \
-              -R "$GH_REPO" \
-              --title "${{ github.ref_name }}" \
-              --notes "LiteWall Xray-Rust multi-architecture release for OpenWrt" \
-              --draft=false
+            echo "Removing existing release ${{ github.ref_name }} to purge old assets..."
+            gh release delete "${{ github.ref_name }}" -R "$GH_REPO" -y --cleanup-tag=false || true
           fi
+          echo "Creating fresh published release ${{ github.ref_name }}..."
+          gh release create "${{ github.ref_name }}" release_assets/* \
+            -R "$GH_REPO" \
+            --title "${{ github.ref_name }}" \
+            --notes "LiteWall Xray-Rust multi-architecture release for OpenWrt" \
+            --draft=false
