@@ -67,65 +67,39 @@ jobs:
       - name: Install cargo-zigbuild and upx
         run: |
           pip install cargo-zigbuild
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           sudo apt-get update && sudo apt-get install -y upx-ucl
 
       - name: Cross-compile binary
         run: |
-          cargo zigbuild --package xray-cli --bin xray-rust --release --target ${{ matrix.target }} 2>&1 | tee build.log
-
-      - name: Capture build log on failure
-        if: failure()
-        run: |
-          echo "### Build failure on ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
-          echo '```text' >> $GITHUB_STEP_SUMMARY
-          tail -n 120 build.log >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failure-log-${{ matrix.arch }}
-          path: build.log
+          export PATH="$HOME/.local/bin:$PATH"
+          RUSTFLAGS="-A deprecated" cargo zigbuild --package xray-cli --bin xray-rust --release --target ${{ matrix.target }}
 
       - name: Package binary and UPX compression
         run: |
-          {
-            set -x
-            echo "=== Target Directory ==="
-            find target -type f -name "xray-rust*" || true
+          OUT_DIR="stage"
+          rm -rf "$OUT_DIR"
+          mkdir -p "$OUT_DIR"
 
-            OUT_DIR="stage"
-            rm -rf "$OUT_DIR"
-            mkdir -p "$OUT_DIR"
+          BIN_PATH="target/${{ matrix.target }}/release/xray-rust"
+          if [ ! -f "$BIN_PATH" ]; then
+            BIN_PATH=$(find target -name "xray-rust" -type f | grep -E "release/xray-rust$" | head -n 1)
+          fi
 
-            BIN_PATH=$(find target -name "xray-rust" -type f 2>/dev/null | grep -E "release/xray-rust$" | head -n 1)
-            echo "Selected BIN_PATH: '$BIN_PATH'"
+          if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
+            cp "$BIN_PATH" "$OUT_DIR/xray-rust"
+            cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
+            upx --best "$OUT_DIR/xray-rust-upx" || true
+            chmod +x "$OUT_DIR"/*
 
-            if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
-              cp "$BIN_PATH" "$OUT_DIR/xray-rust"
-              cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
-              upx --best "$OUT_DIR/xray-rust-upx" || true
-              chmod +x "$OUT_DIR"/*
-
-              ARCHIVE="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
-              tar -czf "$ARCHIVE" -C "$OUT_DIR" .
-              sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
-              ls -lh "$ARCHIVE"
-            else
-              echo "ERROR: Could not find xray-rust binary!"
-              find target -type f || true
-              exit 1
-            fi
-          } 2>&1 | tee package.log
-
-      - name: Capture packaging log on failure
-        if: failure()
-        run: |
-          echo "### Packaging failure log for ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
-          echo '```text' >> $GITHUB_STEP_SUMMARY
-          cat package.log >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
+            ARCHIVE="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
+            tar -czf "$ARCHIVE" -C "$OUT_DIR" .
+            sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+            ls -lh "$ARCHIVE"
+          else
+            echo "ERROR: Could not find xray-rust binary for ${{ matrix.target }}!"
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -134,6 +108,7 @@ jobs:
           path: |
             xray-rust_*.tar.gz
             xray-rust_*.sha256
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release
