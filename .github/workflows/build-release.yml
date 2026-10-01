@@ -90,23 +90,27 @@ jobs:
 
       - name: Package binary and UPX compression
         run: |
+          set -x
           OUT_DIR="stage"
-          BIN_PATH="target/${{ matrix.target }}/release/xray-rust"
           rm -rf "$OUT_DIR"
           mkdir -p "$OUT_DIR"
+
+          # Find compiled binary
+          BIN_PATH=$(find target -name "xray-rust" -type f 2>/dev/null | grep -E "release/xray-rust$" | head -n 1)
+          if [ -z "$BIN_PATH" ] || [ ! -f "$BIN_PATH" ]; then
+            BIN_PATH="target/${{ matrix.target }}/release/xray-rust"
+          fi
+          echo "Found binary at: $BIN_PATH"
+          ls -lh "$BIN_PATH"
 
           # 1. Standard stripped binary
           cp "$BIN_PATH" "$OUT_DIR/xray-rust"
           chmod +x "$OUT_DIR/xray-rust"
 
-          # 2. UPX compressed binary (for flash-constrained routers)
-          if upx --best -o "$OUT_DIR/xray-rust-upx" "$BIN_PATH" >/dev/null 2>&1; then
-            chmod +x "$OUT_DIR/xray-rust-upx"
-            echo "UPX compression succeeded"
-          else
-            echo "UPX unsupported on ${{ matrix.target }}; copying standard binary as fallback"
-            cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
-          fi
+          # 2. UPX compressed binary (in-place compression with safe fallback)
+          cp "$BIN_PATH" "$OUT_DIR/xray-rust-upx"
+          upx --best "$OUT_DIR/xray-rust-upx" || echo "UPX compression skipped or unsupported on ${{ matrix.target }}"
+          chmod +x "$OUT_DIR/xray-rust-upx"
 
           # 3. Create tarball archive
           ARCHIVE_NAME="xray-rust_${{ steps.ver.outputs.version }}_${{ matrix.arch }}.tar.gz"
