@@ -161,13 +161,19 @@ jobs:
           cat SHA256SUMS
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          files: |
-            release_assets/*.tar.gz
-            release_assets/SHA256SUMS
-          generate_release_notes: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "=== Release Assets ==="
+          ls -la release_assets/
+          if gh release view "${{ github.ref_name }}" -R "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} exists, uploading assets..."
+            gh release upload "${{ github.ref_name }}" release_assets/* -R "$GH_REPO" --clobber
+          else
+            echo "Creating release ${{ github.ref_name }}..."
+            gh release create "${{ github.ref_name }}" release_assets/* \
+              -R "$GH_REPO" \
+              --title "${{ github.ref_name }}" \
+              --notes "LiteWall Xray-Rust multi-architecture release for OpenWrt"
+          fi
