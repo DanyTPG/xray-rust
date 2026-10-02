@@ -45,6 +45,7 @@ impl Parser<'_> {
             );
         }
         let quic_params = self.parse_quic_params(stream, index);
+        let tcp_masks = self.parse_finalmask_tcp(stream, index);
         let socket_options = self.parse_socket_options(stream, index);
         if let Some(stream) = stream {
             self.validate_stream_settings_compatibility(stream, index);
@@ -76,6 +77,7 @@ impl Parser<'_> {
             security,
             quic_params,
             socket_options,
+            tcp_masks,
         })
     }
 
@@ -480,7 +482,6 @@ impl Parser<'_> {
             return None;
         }
         self.reject_unknown_fields(finalmask, &finalmask_path, &surface::FINALMASK);
-        self.reject_finalmask_masks(finalmask, "tcp", &finalmask_path);
         self.reject_finalmask_masks(finalmask, "udp", &finalmask_path);
 
         let quic = finalmask.get("quicParams")?;
@@ -1453,4 +1454,230 @@ impl Parser<'_> {
             }
         }
     }
+
+    pub(super) fn parse_finalmask_tcp(
+        &mut self,
+        stream: Option<&Value>,
+        index: usize,
+    ) -> Vec<TcpMask> {
+        let Some(finalmask) = stream.and_then(|s| s.get("finalmask")) else {
+            return Vec::new();
+        };
+        if finalmask.is_null() {
+            return Vec::new();
+        }
+        let finalmask_path = format!("$.outbounds[{index}].streamSettings.finalmask");
+        let Some(tcp) = finalmask.get("tcp") else {
+            return Vec::new();
+        };
+        if tcp.is_null() {
+            return Vec::new();
+        }
+        let Some(items) = tcp.as_array() else {
+            self.error(
+                format!("{finalmask_path}.tcp"),
+                "finalmask.tcp must be an array or null",
+            );
+            return Vec::new();
+        };
+
+        let mut masks = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            let item_path = format!("{finalmask_path}.tcp[{i}]");
+            if !item.is_object() {
+                self.error(&item_path, "mask item must be an object");
+                continue;
+            }
+            self.reject_unknown_fields(item, &item_path, &surface::FINALMASK_TCP_MASK);
+            let Some(typ) = item.get("type").and_then(Value::as_str) else {
+                self.error(
+                    format!("{item_path}.type"),
+                    "mask type is required and must be a string",
+                );
+                continue;
+            };
+            if !typ.eq_ignore_ascii_case("fragment") {
+                self.error(
+                    format!("{item_path}.type"),
+                    format!("unsupported tcp mask type: {typ}"),
+                );
+                continue;
+            }
+            let empty_obj = Value::Object(Default::default());
+            let settings = item.get("settings").unwrap_or(&empty_obj);
+            if !settings.is_object() {
+                self.error(format!("{item_path}.settings"), "mask settings must be an object");
+                continue;
+            }
+            let settings_path = format!("{item_path}.settings");
+            self.reject_unknown_fields(
+                settings,
+                &settings_path,
+                &surface::FINALMASK_FRAGMENT_SETTINGS,
+            );
+            if let Some(cfg) = self.parse_fragment_settings(settings, &settings_path) {
+                masks.push(TcpMask::Fragment(cfg));
+            }
+        }
+        masks
+    }
+
+    fn parse_fragment_settings(
+        &mut self,
+        settings: &Value,
+        path: &str,
+    ) -> Option<FragmentConfig> {
+        let packets_str = settings.get("packets").and_then(Value::as_str).unwrap_or("");
+        let (packets_from, packets_to) = match packets_str.to_ascii_lowercase().as_str() {
+            "tlshello" => (0, 1),
+            "" => (0, 0),
+            other => match parse_range_str(other) {
+                Ok((from, to)) => {
+                    if from == 0 {
+                        self.error(format!("{path}.packets"), "PacketsFrom can't be 0");
+                        return None;
+                    }
+                    (from, to)
+                }
+                Err(e) => {
+                    self.error(format!("{path}.packets"), format!("Invalid PacketsFrom: {e}"));
+                    return None;
+                }
+            },
+        };
+
+        let mut lengths_min = Vec::new();
+        let mut lengths_max = Vec::new();
+        if let Some(lengths) = settings.get("lengths").and_then(Value::as_array) {
+            for (idx, val) in lengths.iter().enumerate() {
+                match parse_range_value(val) {
+                    Ok((min, max)) => {
+                        lengths_min.push(min);
+                        lengths_max.push(max);
+                    }
+                    Err(e) => {
+                        self.error(format!("{path}.lengths[{idx}]"), e);
+                        return None;
+                    }
+                }
+            }
+        } else if let Some(length) = settings.get("length") {
+            match parse_range_value(length) {
+                Ok((min, max)) => {
+                    lengths_min.push(min);
+                    lengths_max.push(max);
+                }
+                Err(e) => {
+                    self.error(format!("{path}.length"), e);
+                    return None;
+                }
+            }
+        } else {
+            lengths_min.push(0);
+            lengths_max.push(0);
+        }
+
+        if lengths_min.is_empty() || *lengths_min.last().unwrap() == 0 {
+            self.error(
+                format!("{path}.lengths"),
+                "last lengths entry min can't be 0",
+            );
+            return None;
+        }
+
+        let mut delays_min = Vec::new();
+        let mut delays_max = Vec::new();
+        if let Some(delays) = settings.get("delays").and_then(Value::as_array) {
+            for (idx, val) in delays.iter().enumerate() {
+                match parse_range_value(val) {
+                    Ok((min, max)) => {
+                        delays_min.push(min);
+                        delays_max.push(max);
+                    }
+                    Err(e) => {
+                        self.error(format!("{path}.delays[{idx}]"), e);
+                        return None;
+                    }
+                }
+            }
+        } else if let Some(delay) = settings.get("delay") {
+            match parse_range_value(delay) {
+                Ok((min, max)) => {
+                    delays_min.push(min);
+                    delays_max.push(max);
+                }
+                Err(e) => {
+                    self.error(format!("{path}.delay"), e);
+                    return None;
+                }
+            }
+        } else {
+            delays_min.push(0);
+            delays_max.push(0);
+        }
+
+        let (max_split_min, max_split_max) = if let Some(ms) = settings.get("maxSplit") {
+            match parse_range_value(ms) {
+                Ok((min, max)) => (min, max),
+                Err(e) => {
+                    self.error(format!("{path}.maxSplit"), e);
+                    return None;
+                }
+            }
+        } else {
+            (0, 0)
+        };
+
+        Some(FragmentConfig {
+            packets_from,
+            packets_to,
+            lengths_min,
+            lengths_max,
+            delays_min,
+            delays_max,
+            max_split_min,
+            max_split_max,
+        })
+    }
+}
+
+fn parse_range_value(val: &Value) -> Result<(u64, u64), String> {
+    match val {
+        Value::Number(n) => {
+            let v = n
+                .as_u64()
+                .ok_or_else(|| "expected non-negative integer".to_string())?;
+            Ok((v, v))
+        }
+        Value::String(s) => parse_range_str(s),
+        _ => Err("expected string or integer range".to_string()),
+    }
+}
+
+fn parse_range_str(s: &str) -> Result<(u64, u64), String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok((0, 0));
+    }
+    if let Ok(v) = s.parse::<u64>() {
+        return Ok((v, v));
+    }
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() == 2 {
+        let left = parts[0]
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| format!("invalid range: {e}"))?;
+        let right = parts[1]
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| format!("invalid range: {e}"))?;
+        let (from, to) = if left <= right {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        return Ok((from, to));
+    }
+    Err(format!("invalid range string: '{s}'"))
 }

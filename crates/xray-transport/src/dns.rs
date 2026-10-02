@@ -2294,6 +2294,7 @@ fn dns_tls_client_config(server: &NameServer) -> TlsClientConfig {
         alpn: Vec::new(),
         fingerprint: None,
         cipher_suites: Vec::new(),
+        tcp_masks: Vec::new(),
     }
 }
 

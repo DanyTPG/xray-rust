@@ -20,6 +20,7 @@ mod connected_quic;
 
 mod dialer;
 mod dns;
+pub mod fragment;
 mod happy_eyeballs;
 pub mod hysteria;
 
@@ -54,14 +55,27 @@ pub use reality_runtime::{
     RealityHandshakeContextProvider, RealityRuntimeEngine, SystemRealityHandshakeContextProvider,
 };
 pub use reality_rustls::RustlsRealityTlsSessionProvider;
+pub use fragment::{apply_tcp_masks, rand_between, FragmentStream};
 pub use tls::{plain_tls_client_hello_bytes, TlsConnector};
 pub use utls_profiles::draw_modern_fingerprint;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectorConfig {
     Tcp,
+    MaskedTcp(Vec<xray_config::TcpMask>),
     Tls(TlsClientConfig),
     Reality(RealityClientConfig),
+}
+
+impl ConnectorConfig {
+    pub fn tcp_masks(&self) -> &[xray_config::TcpMask] {
+        match self {
+            ConnectorConfig::Tcp => &[],
+            ConnectorConfig::MaskedTcp(masks) => masks,
+            ConnectorConfig::Tls(tls) => &tls.tcp_masks,
+            ConnectorConfig::Reality(reality) => &reality.tcp_masks,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +102,8 @@ pub struct TlsClientConfig {
     pub fingerprint: Option<String>,
     /// Colon-separated list of supported cipher suites from `tlsSettings.cipherSuites`.
     pub cipher_suites: Vec<String>,
+    /// TCP masks from streamSettings.finalmask.tcp (e.g. fragment).
+    pub tcp_masks: Vec<xray_config::TcpMask>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -98,6 +114,8 @@ pub struct RealityClientConfig {
     pub short_id: Vec<u8>,
     pub spider_x: String,
     pub mldsa65_verify: Option<Vec<u8>>,
+    /// TCP masks from streamSettings.finalmask.tcp (e.g. fragment).
+    pub tcp_masks: Vec<xray_config::TcpMask>,
 }
 
 impl fmt::Debug for RealityClientConfig {
@@ -263,6 +281,28 @@ impl TransportStream for tokio_rustls::client::TlsStream<TcpStream> {
 }
 
 pub type BoxedTransportStream = Box<dyn TransportStream>;
+
+impl TransportStream for Box<dyn TransportStream> {
+    fn release_record_alignment(&mut self) {
+        (**self).release_record_alignment();
+    }
+
+    fn poll_read_direct(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        output: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut **self).poll_read_direct(cx, output)
+    }
+
+    fn poll_write_direct(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        input: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut **self).poll_write_direct(cx, input)
+    }
+}
 
 /// Opens the raw TCP carrier used by [`TransportDialer`].
 ///
@@ -446,17 +486,21 @@ impl TcpConnector {
 impl TransportConnector for TcpConnector {
     async fn connect(&self, target: &Target) -> Result<BoxedTransportStream, TransportError> {
         match &self.config {
-            ConnectorConfig::Tcp => {}
+            ConnectorConfig::Tcp => {
+                let stream = connect_tcp_target(target, self.socket_protector.as_deref()).await?;
+                Ok(Box::new(stream))
+            }
+            ConnectorConfig::MaskedTcp(masks) => {
+                let stream = connect_tcp_target(target, self.socket_protector.as_deref()).await?;
+                Ok(apply_tcp_masks(Box::new(stream), masks))
+            }
             ConnectorConfig::Tls(_) => {
-                return Err(TransportError::UnsupportedConnectorConfig("tls"));
+                Err(TransportError::UnsupportedConnectorConfig("tls"))
             }
             ConnectorConfig::Reality(_) => {
-                return Err(TransportError::UnsupportedConnectorConfig("reality"));
+                Err(TransportError::UnsupportedConnectorConfig("reality"))
             }
         }
-
-        let stream = connect_tcp_target(target, self.socket_protector.as_deref()).await?;
-        Ok(Box::new(stream))
     }
 }
 

@@ -3032,6 +3032,7 @@ dependencies = [
  "webpki-roots",
  "x25519-dalek",
  "x509-parser",
+ "xray-config",
  "xray-proxy",
  "xray-routing",
  "xray-utls",

@@ -496,6 +496,7 @@ impl DnsOutbound {
                     alpn: alpn.clone(),
                     fingerprint: fingerprint.clone(),
                     cipher_suites: cipher_suites.clone(),
+                    tcp_masks: Vec::new(),
                 }))
             }
         }
@@ -3299,7 +3300,11 @@ fn build_vless_tcp_outbound(outbound: &OutboundConfig) -> Result<VlessTcpOutboun
         validate_stream_flow(user.flow.as_deref(), &outbound.stream.security)?;
     }
 
-    let transport = build_vless_connector(&outbound.stream.security, &settings.server);
+    let transport = build_vless_connector(
+        &outbound.stream.security,
+        &settings.server,
+        &outbound.stream.tcp_masks,
+    );
     let download = build_xhttp_download(outbound)?;
 
     let addr = match &settings.server {
@@ -3340,6 +3345,7 @@ fn dns_tcp_connector(stream: &StreamSettings) -> Result<DnsTcpConnector, CoreErr
                     alpn: tls.alpn.clone(),
                     fingerprint: tls.fingerprint.clone(),
                     cipher_suites: tls.cipher_suites.clone(),
+                    tcp_masks: stream.tcp_masks.clone(),
                 }),
             )),
             Some(_) | None => Ok(DnsTcpConnector::TlsFromTarget {
@@ -3359,6 +3365,7 @@ fn dns_tcp_connector(stream: &StreamSettings) -> Result<DnsTcpConnector, CoreErr
                 short_id: reality.short_id.as_slice().to_vec(),
                 spider_x: reality.spider_x.clone(),
                 mldsa65_verify: reality.mldsa65_verify.clone(),
+                tcp_masks: stream.tcp_masks.clone(),
             },
         ))),
     }

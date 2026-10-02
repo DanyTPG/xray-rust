@@ -5497,15 +5497,20 @@ fn finalmask_empty_masks_are_accepted_but_nonempty_masks_fail_closed() {
         Some(QuicParamsSettings::default())
     );
 
-    for mask in ["tcp", "udp"] {
-        assert_parse_error_path(
-            &raw_with_stream_settings(&format!(
-                r#""network": "xhttp", "security": "none",
-                   "finalmask": {{"{mask}": [{{"type": "example"}}]}}"#
-            )),
-            &format!("$.outbounds[0].streamSettings.finalmask.{mask}"),
-        );
-    }
+    assert_parse_error_path(
+        &raw_with_stream_settings(
+            r#""network": "xhttp", "security": "none",
+               "finalmask": {"tcp": [{"type": "example"}]}"#,
+        ),
+        "$.outbounds[0].streamSettings.finalmask.tcp[0].type",
+    );
+    assert_parse_error_path(
+        &raw_with_stream_settings(
+            r#""network": "xhttp", "security": "none",
+               "finalmask": {"udp": [{"type": "example"}]}"#,
+        ),
+        "$.outbounds[0].streamSettings.finalmask.udp",
+    );
 }
 
 #[test]
@@ -6943,4 +6948,68 @@ fn shared_mobile_encryption_fixtures_match_rust_validation() {
             case["name"]
         );
     }
+}
+
+#[test]
+fn parses_finalmask_tcp_fragment() {
+    let raw = r#"{
+        "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": "127.0.0.1",
+                    "port": 443,
+                    "users": [{ "id": "27848739-7e62-4138-9fd3-098a63964b6b", "encryption": "none" }]
+                }]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "example.com"
+                },
+                "finalmask": {
+                    "tcp": [
+                        {
+                            "type": "fragment",
+                            "settings": {
+                                "packets": "tlshello",
+                                "lengths": ["0", "104", "1"],
+                                "delays": ["0"],
+                                "maxSplit": "0"
+                            }
+                        },
+                        {
+                            "type": "fragment",
+                            "settings": {
+                                "packets": "1-1",
+                                "lengths": ["114", "1"],
+                                "delays": ["1"],
+                                "maxSplit": "11"
+                            }
+                        }
+                    ]
+                }
+            }
+        }]
+    }"#;
+
+    let parsed = xray_config::parse_xray_json(raw).expect("finalmask tcp fragment should parse");
+    let stream = &parsed.config.outbounds[0].stream;
+    assert_eq!(stream.tcp_masks.len(), 2);
+    let xray_config::TcpMask::Fragment(frag0) = &stream.tcp_masks[0];
+    assert!(frag0.is_tls_hello());
+    assert_eq!(frag0.lengths_min, vec![0, 104, 1]);
+    assert_eq!(frag0.lengths_max, vec![0, 104, 1]);
+    assert_eq!(frag0.delays_min, vec![0]);
+    assert_eq!(frag0.delays_max, vec![0]);
+    assert!(frag0.merge_tls_hello_segments());
+
+    let xray_config::TcpMask::Fragment(frag1) = &stream.tcp_masks[1];
+    assert_eq!(frag1.packets_from, 1);
+    assert_eq!(frag1.packets_to, 1);
+    assert_eq!(frag1.lengths_min, vec![114, 1]);
+    assert_eq!(frag1.delays_min, vec![1]);
+    assert_eq!(frag1.max_split_min, 11);
+    assert_eq!(frag1.max_split_max, 11);
 }

@@ -245,6 +245,7 @@ impl TlsConnector {
                     alpn,
                     fingerprint,
                     cipher_suites,
+                    ..
                 } = config;
                 let key = ClientConfigKey {
                     allow_insecure: *allow_insecure,
@@ -323,8 +324,9 @@ impl TlsConnector {
         };
 
         let stream = connect_tcp_stream(addr, self.socket_protector.as_deref()).await?;
+        let stream = crate::apply_tcp_masks(Box::new(stream), &config.tcp_masks);
         self.connect_stream_with_server_name(
-            Box::new(stream),
+            stream,
             config,
             server_name,
             TlsAlpnPolicy::Raw,
@@ -340,8 +342,9 @@ impl TlsConnector {
     ) -> Result<BoxedTransportStream, TransportError> {
         let server_name = tls_server_name(config)?;
         let stream = connect_tcp_stream(addr, self.socket_protector.as_deref()).await?;
+        let stream = crate::apply_tcp_masks(Box::new(stream), &config.tcp_masks);
         self.connect_stream_with_server_name(
-            Box::new(stream),
+            stream,
             config,
             server_name,
             TlsAlpnPolicy::Raw,
@@ -366,8 +369,9 @@ impl TlsConnector {
         )
         .await?;
 
+        let stream = crate::apply_tcp_masks(Box::new(stream), &config.tcp_masks);
         self.connect_stream_with_server_name(
-            Box::new(stream),
+            stream,
             config,
             server_name,
             TlsAlpnPolicy::Raw,

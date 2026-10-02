@@ -3,10 +3,10 @@ use std::{fmt, io, net::SocketAddr, sync::Arc};
 use crate::stream::{connect_httpupgrade, connect_websocket, TransportLayer};
 use crate::utls_tls::TlsAlpnPolicy;
 use crate::{
-    connect_tcp_happy_eyeballs, connect_tcp_stream, connect_tcp_target, BoxedTransportStream,
-    ConnectorConfig, HappyEyeballsConfig, RealityRuntimeEngine, RealityTlsEngine,
-    ResolvedTcpConnector, RustlsRealityTlsSessionProvider, SocketProtector, TlsConnector,
-    TransportError,
+    apply_tcp_masks, connect_tcp_happy_eyeballs, connect_tcp_stream, connect_tcp_target,
+    BoxedTransportStream, ConnectorConfig, HappyEyeballsConfig, RealityRuntimeEngine,
+    RealityTlsEngine, ResolvedTcpConnector, RustlsRealityTlsSessionProvider, SocketProtector,
+    TlsConnector, TransportError,
 };
 use xray_routing::{Target, TargetAddr};
 
@@ -118,7 +118,9 @@ impl TransportDialer {
                 tls_config: self.tls.http3_client_config_for(tls)?,
                 socket_protector: self.socket_protector.clone(),
             }),
-            ConnectorConfig::Tcp => Err(TransportError::UnsupportedHttp3Security("TCP")),
+            ConnectorConfig::Tcp | ConnectorConfig::MaskedTcp(_) => {
+                Err(TransportError::UnsupportedHttp3Security("TCP"))
+            }
             ConnectorConfig::Reality(_) => Err(TransportError::UnsupportedHttp3Security("REALITY")),
         }
     }
@@ -132,6 +134,12 @@ impl TransportDialer {
             ConnectorConfig::Tcp => Ok(Box::new(
                 connect_tcp_target(target, self.socket_protector.as_deref()).await?,
             )),
+            ConnectorConfig::MaskedTcp(masks) => {
+                let stream = Box::new(
+                    connect_tcp_target(target, self.socket_protector.as_deref()).await?,
+                );
+                Ok(apply_tcp_masks(stream, masks))
+            }
             ConnectorConfig::Tls(tls_config) => self.tls.connect(target, tls_config).await,
             ConnectorConfig::Reality(reality_config) => match &self.reality {
                 Some(reality) => reality.connect(reality_config, target).await,
@@ -241,8 +249,16 @@ impl TransportDialer {
     ) -> Result<BoxedTransportStream, TransportError> {
         match config {
             ConnectorConfig::Tcp => {
-                self.connect_tcp_carrier(original_target, candidates, happy_eyeballs)
-                    .await
+                let stream = self
+                    .connect_tcp_carrier(original_target, candidates, happy_eyeballs)
+                    .await?;
+                Ok(apply_tcp_masks(stream, config.tcp_masks()))
+            }
+            ConnectorConfig::MaskedTcp(masks) => {
+                let stream = self
+                    .connect_tcp_carrier(original_target, candidates, happy_eyeballs)
+                    .await?;
+                Ok(apply_tcp_masks(stream, masks))
             }
             ConnectorConfig::Tls(tls_config) => {
                 // Validate the complete TLS shape before the proxy or the
@@ -251,6 +267,7 @@ impl TransportDialer {
                 let stream = self
                     .connect_tcp_carrier(original_target, candidates, happy_eyeballs)
                     .await?;
+                let stream = apply_tcp_masks(stream, &tls_config.tcp_masks);
                 self.tls.connect_prepared_stream(stream, prepared).await
             }
             ConnectorConfig::Reality(reality_config) => {
@@ -268,28 +285,32 @@ impl TransportDialer {
                 let race_config = happy_eyeballs
                     .filter(|config| !config.try_delay.is_zero() && candidates.len() >= 2);
 
-                let Some(race_config) = race_config else {
-                    return reality
-                        .connect_socket_addr(reality_config, original_target, first)
-                        .await;
+                let stream = match race_config {
+                    Some(race_config) => {
+                        connect_tcp_happy_eyeballs(
+                            candidates,
+                            self.socket_protector.as_deref(),
+                            race_config,
+                        )
+                        .await?
+                    }
+                    None => {
+                        connect_tcp_stream(first, self.socket_protector.as_deref()).await?
+                    }
                 };
                 let Some(prepared) =
                     reality.prepare_preconnected(reality_config, original_target)?
                 else {
                     // Legacy engines remain usable. They may override
                     // `connect_socket_addr` to preserve scoped IPv6 metadata.
-                    return reality
+                    let stream = reality
                         .connect_socket_addr(reality_config, original_target, first)
-                        .await;
+                        .await?;
+                    return Ok(apply_tcp_masks(stream, &reality_config.tcp_masks));
                 };
-                let stream = connect_tcp_happy_eyeballs(
-                    candidates,
-                    self.socket_protector.as_deref(),
-                    race_config,
-                )
-                .await?;
 
-                prepared.complete(stream).await
+                let stream = prepared.complete(stream).await?;
+                Ok(apply_tcp_masks(stream, &reality_config.tcp_masks))
             }
         }
     }

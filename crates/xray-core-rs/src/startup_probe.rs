@@ -195,6 +195,7 @@ async fn run_startup_probe_inner(
                     alpn: Vec::new(),
                     fingerprint: None,
                     cipher_suites: Vec::new(),
+                    tcp_masks: Vec::new(),
                 },
             ),
         )

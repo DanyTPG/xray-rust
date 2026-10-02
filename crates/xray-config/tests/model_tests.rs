@@ -44,6 +44,7 @@ fn normalized_model_can_represent_vless_reality_vision() {
             }),
             quic_params: None,
             socket_options: None,
+            tcp_masks: Vec::new(),
         },
         settings: OutboundSettings::Vless(VlessOutboundSettings {
             server: TargetAddr::Domain("server.example".to_owned()),
@@ -103,7 +104,8 @@ fn normalized_model_can_represent_vless_reality_vision() {
                 }),
                 quic_params: None,
                 socket_options: None,
-            },
+                tcp_masks: Vec::new(),
+                },
             settings: OutboundSettings::Vless(VlessOutboundSettings {
                 server: TargetAddr::Domain("server.example".to_owned()),
                 port: 443,
@@ -154,6 +156,7 @@ fn normalized_model_can_represent_freedom_outbound() {
             security: StreamSecurity::None,
             quic_params: None,
             socket_options: None,
+            tcp_masks: Vec::new(),
         },
         settings: OutboundSettings::Freedom,
     };
@@ -258,6 +261,7 @@ fn normalized_model_uses_xray_happy_eyeballs_defaults() {
         socket_options: Some(SocketOptions {
             happy_eyeballs: Some(HappyEyeballsSettings::default()),
         }),
+        tcp_masks: Vec::new(),
     };
 
     assert_eq!(

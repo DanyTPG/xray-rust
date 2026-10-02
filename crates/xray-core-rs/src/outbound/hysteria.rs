@@ -90,6 +90,7 @@ impl HysteriaOutbound {
                     alpn: vec!["h3".into()],
                     fingerprint: None,
                     cipher_suites: Vec::new(),
+                    tcp_masks: Vec::new(),
                 },
                 auth: auth.clone(),
                 session: Mutex::new(None),

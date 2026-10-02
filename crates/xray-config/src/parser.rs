@@ -28,9 +28,9 @@ use crate::{
     PolicyConfig, PolicyLevelConfig, PolicySystemConfig, QuicBbrProfile, QuicCongestion,
     QuicIntervalRange, QuicParamsSettings, QuicUdpHopSettings, RealitySettings, RealityShortId,
     RegexMatcher, SniffingDestination, SocketOptions, StreamSecurity, StreamSettings,
-    StreamTransport, TargetAddr, TlsSettings, WebSocketSettings, XhttpMode, XhttpPaddingMethod,
+    StreamTransport, TargetAddr, TcpMask, TlsSettings, WebSocketSettings, XhttpMode, XhttpPaddingMethod,
     XhttpPaddingPlacement, XhttpPlacement, XhttpRange, XhttpSettings, XhttpUplinkDataPlacement,
-    XhttpXmuxSettings, DEFAULT_OBSERVATORY_PROBE_INTERVAL, DEFAULT_OBSERVATORY_PROBE_URL,
+    XhttpXmuxSettings, FragmentConfig, DEFAULT_OBSERVATORY_PROBE_INTERVAL, DEFAULT_OBSERVATORY_PROBE_URL,
     MAX_DNS_SERVER_TIMEOUT_MS, MAX_DNS_SERVE_EXPIRED_TTL_SECONDS, OBSERVATORY_PROBE_TIMEOUT,
 };
 

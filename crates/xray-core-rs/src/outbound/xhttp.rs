@@ -13,9 +13,16 @@ pub(super) struct XhttpDownloadOutbound {
 pub(super) fn build_vless_connector(
     security: &StreamSecurity,
     destination: &TargetAddr,
+    tcp_masks: &[xray_config::TcpMask],
 ) -> ConnectorConfig {
     match security {
-        StreamSecurity::None => ConnectorConfig::Tcp,
+        StreamSecurity::None => {
+            if tcp_masks.is_empty() {
+                ConnectorConfig::Tcp
+            } else {
+                ConnectorConfig::MaskedTcp(tcp_masks.to_vec())
+            }
+        }
         StreamSecurity::Tls(tls) => {
             let server_name = match tls.server_name.as_deref() {
                 Some(name) if !name.is_empty() => name.to_owned(),
@@ -33,6 +40,7 @@ pub(super) fn build_vless_connector(
                 alpn: tls.alpn.clone(),
                 fingerprint: tls.fingerprint.clone(),
                 cipher_suites: tls.cipher_suites.clone(),
+                tcp_masks: tcp_masks.to_vec(),
             })
         }
         StreamSecurity::Reality(reality) => ConnectorConfig::Reality(RealityClientConfig {
@@ -42,6 +50,7 @@ pub(super) fn build_vless_connector(
             short_id: reality.short_id.as_slice().to_vec(),
             spider_x: reality.spider_x.clone(),
             mldsa65_verify: reality.mldsa65_verify.clone(),
+            tcp_masks: tcp_masks.to_vec(),
         }),
     }
 }
@@ -104,7 +113,11 @@ pub(super) fn build_xhttp_download(
     };
     Ok(Some(XhttpDownloadOutbound {
         server: Target::new(addr, download.port, RoutingNetwork::Tcp),
-        connector: build_vless_connector(&download.stream.security, &download.address),
+        connector: build_vless_connector(
+            &download.stream.security,
+            &download.address,
+            &download.stream.tcp_masks,
+        ),
         transport: build_xhttp_transport(
             settings,
             &download.stream.security,

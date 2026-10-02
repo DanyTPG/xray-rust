@@ -781,6 +781,50 @@ pub struct StreamSettings {
     /// explicitly present (possibly default-valued) configuration.
     pub quic_params: Option<QuicParamsSettings>,
     pub socket_options: Option<SocketOptions>,
+    pub tcp_masks: Vec<TcpMask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TcpMask {
+    Fragment(FragmentConfig),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FragmentConfig {
+    pub packets_from: u64,
+    pub packets_to: u64,
+    pub lengths_min: Vec<u64>,
+    pub lengths_max: Vec<u64>,
+    pub delays_min: Vec<u64>,
+    pub delays_max: Vec<u64>,
+    pub max_split_min: u64,
+    pub max_split_max: u64,
+}
+
+impl FragmentConfig {
+    pub fn is_tls_hello(&self) -> bool {
+        self.packets_from == 0 && self.packets_to == 1
+    }
+
+    pub fn length_for_segment(&self, seg_idx: usize) -> (u64, u64) {
+        if self.lengths_min.is_empty() {
+            return (0, 0);
+        }
+        let idx = seg_idx.min(self.lengths_min.len() - 1);
+        (self.lengths_min[idx], self.lengths_max[idx])
+    }
+
+    pub fn delay_for_segment(&self, seg_idx: usize) -> (u64, u64) {
+        if self.delays_min.is_empty() {
+            return (0, 0);
+        }
+        let idx = seg_idx.min(self.delays_min.len() - 1);
+        (self.delays_min[idx], self.delays_max[idx])
+    }
+
+    pub fn merge_tls_hello_segments(&self) -> bool {
+        self.delays_max.len() == 1 && self.delays_max[0] == 0
+    }
 }
 
 /// Xray's final QUIC parameters after config-build normalization.
