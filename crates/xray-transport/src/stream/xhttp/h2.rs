@@ -276,10 +276,27 @@ pub async fn connect_h2_with_receive_window(
     })
 }
 
+pub static H2_TOTAL_DIALED: AtomicU64 = AtomicU64::new(0);
+pub static H2_TOTAL_CLOSED: AtomicU64 = AtomicU64::new(0);
+pub static H2_ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+pub static H2_ACTIVE_STREAMS: AtomicU64 = AtomicU64::new(0);
+
 async fn drive_connection(
     connection: client::Connection<WatchedIo, Bytes>,
     keepalive: Option<H2Keepalive>,
 ) -> Result<(), h2::Error> {
+    H2_TOTAL_DIALED.fetch_add(1, Ordering::Relaxed);
+    H2_ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+
+    struct ActiveGuard;
+    impl Drop for ActiveGuard {
+        fn drop(&mut self) {
+            H2_TOTAL_CLOSED.fetch_add(1, Ordering::Relaxed);
+            H2_ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+    let _guard = ActiveGuard;
+
     let Some(keepalive) = keepalive else {
         return connection.await;
     };

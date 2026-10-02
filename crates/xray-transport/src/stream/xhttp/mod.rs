@@ -22,6 +22,23 @@ pub(crate) use h3::{
 pub use h3::{H3Congestion, H3QuicConfig, H3QuicVersion, H3UdpHopConfig};
 pub use transport::{XhttpConnectTarget, XhttpHttpVersion, XhttpTransport, XhttpXmuxPolicy};
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct XhttpTelemetry {
+    pub h2_total_dialed: u64,
+    pub h2_total_closed: u64,
+    pub h2_active_connections: u64,
+    pub h2_active_streams: u64,
+}
+
+pub fn xhttp_telemetry() -> XhttpTelemetry {
+    XhttpTelemetry {
+        h2_total_dialed: h2::H2_TOTAL_DIALED.load(std::sync::atomic::Ordering::Relaxed),
+        h2_total_closed: h2::H2_TOTAL_CLOSED.load(std::sync::atomic::Ordering::Relaxed),
+        h2_active_connections: h2::H2_ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::Relaxed),
+        h2_active_streams: h2::H2_ACTIVE_STREAMS.load(std::sync::atomic::Ordering::Relaxed),
+    }
+}
+
 /// Internal HTTP/1.1 engine surface used by XHTTP orchestration and focused
 /// integration tests. This is not a standalone HTTP client API.
 #[doc(hidden)]

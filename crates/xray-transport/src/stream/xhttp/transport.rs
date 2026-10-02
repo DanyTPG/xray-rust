@@ -2771,6 +2771,7 @@ impl ConnectionLifecycle {
 
     fn checkout(self: &Arc<Self>) -> ConnectionActivityLease {
         self.active.fetch_add(1, Ordering::AcqRel);
+        super::h2::H2_ACTIVE_STREAMS.fetch_add(1, Ordering::Relaxed);
         ConnectionActivityLease {
             lifecycle: Arc::clone(self),
         }
@@ -2803,6 +2804,7 @@ struct ConnectionActivityLease {
 
 impl Drop for ConnectionActivityLease {
     fn drop(&mut self) {
+        super::h2::H2_ACTIVE_STREAMS.fetch_sub(1, Ordering::Relaxed);
         if self.lifecycle.active.fetch_sub(1, Ordering::AcqRel) == 1 {
             *lock_unpoisoned(&self.lifecycle.last_idle) = (self.lifecycle.clock)();
         }

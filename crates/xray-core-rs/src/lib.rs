@@ -49,6 +49,8 @@ const TUN_INBOUND_QUEUE_DEPTH: usize = 1024;
 const TUN_OUTBOUND_QUEUE_DEPTH: usize = 4096;
 const GENERATED_DNS_TAG_PREFIX: &str = "xray.system.";
 
+pub use xray_transport::{xhttp_telemetry, XhttpTelemetry};
+
 pub use connection::{
     ConnectionCloseError, ConnectionId, ConnectionInfo, ConnectionRegistry, ConnectionSnapshot,
     ConnectionState, OutboundAccounting, OutboundAccountingSnapshot,
@@ -712,6 +714,10 @@ impl Core {
 
     pub fn routing_policy_snapshot(&self) -> RoutingPolicySnapshot {
         self.outbound_router.routing_policy_snapshot()
+    }
+
+    pub fn connection_registry(&self) -> Arc<ConnectionRegistry> {
+        Arc::clone(&self.connection_registry)
     }
 
     pub fn connection_snapshot(&self) -> ConnectionSnapshot {

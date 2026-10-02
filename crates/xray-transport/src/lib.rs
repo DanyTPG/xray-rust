@@ -38,6 +38,7 @@ mod utls_profiles;
 mod utls_shaping;
 mod utls_tls;
 
+pub use stream::{xhttp_telemetry, XhttpTelemetry};
 pub use dialer::TransportDialer;
 pub use dns::{
     dns_response_matches_query, exchange_dns_https_h2, exchange_dns_quic_candidates,

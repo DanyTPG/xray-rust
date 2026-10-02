@@ -1,8 +1,34 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+
+pub static REDIR_TOTAL_ACCEPTED: AtomicU64 = AtomicU64::new(0);
+pub static REDIR_TOTAL_CLOSED: AtomicU64 = AtomicU64::new(0);
+pub static REDIR_ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+pub static DNS_TOTAL_QUERIES: AtomicU64 = AtomicU64::new(0);
+pub static DNS_ACTIVE_QUERIES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RedirTelemetry {
+    pub redir_total_accepted: u64,
+    pub redir_total_closed: u64,
+    pub redir_active_connections: u64,
+    pub dns_total_queries: u64,
+    pub dns_active_queries: u64,
+}
+
+pub fn redir_telemetry() -> RedirTelemetry {
+    RedirTelemetry {
+        redir_total_accepted: REDIR_TOTAL_ACCEPTED.load(Ordering::Relaxed),
+        redir_total_closed: REDIR_TOTAL_CLOSED.load(Ordering::Relaxed),
+        redir_active_connections: REDIR_ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
+        dns_total_queries: DNS_TOTAL_QUERIES.load(Ordering::Relaxed),
+        dns_active_queries: DNS_ACTIVE_QUERIES.load(Ordering::Relaxed),
+    }
+}
 
 pub async fn start_dns_forwarder(listen_port: u16, socks_addr: SocketAddr) -> std::io::Result<()> {
     let listen_addr: SocketAddr = ([127, 0, 0, 1], listen_port).into();
@@ -22,8 +48,17 @@ pub async fn start_dns_forwarder(listen_port: u16, socks_addr: SocketAddr) -> st
 
         let query = buf[..len].to_vec();
         let sock_clone = Arc::clone(&socket);
+        DNS_TOTAL_QUERIES.fetch_add(1, Ordering::Relaxed);
+        DNS_ACTIVE_QUERIES.fetch_add(1, Ordering::Relaxed);
 
         tokio::spawn(async move {
+            struct DnsGuard;
+            impl Drop for DnsGuard {
+                fn drop(&mut self) {
+                    DNS_ACTIVE_QUERIES.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            let _guard = DnsGuard;
             if let Ok(resp) = resolve_dns_over_socks(&query, socks_addr).await {
                 let _ = sock_clone.send_to(&resp, peer).await;
             }
@@ -116,7 +151,18 @@ pub async fn start_redir_loop(listen_port: u16, socks_addr: SocketAddr) -> std::
             }
         };
 
+        REDIR_TOTAL_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+        REDIR_ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+
         tokio::spawn(async move {
+            struct RedirGuard;
+            impl Drop for RedirGuard {
+                fn drop(&mut self) {
+                    REDIR_TOTAL_CLOSED.fetch_add(1, Ordering::Relaxed);
+                    REDIR_ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            let _guard = RedirGuard;
             if let Err(_e) = handle_redir_client(inbound, socks_addr, idle_timeout).await {
                 // Client connection ended or errored
             }

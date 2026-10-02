@@ -1,5 +1,6 @@
 mod config;
 pub mod redir;
+pub mod telemetry;
 
 #[cfg(target_arch = "arm")]
 mod soft_float_compat {
@@ -371,6 +372,8 @@ where
     let tun_runtime_options = parse_tun_runtime_options_env()?;
     let mut core = Core::with_tun_runtime_options(config, tun_runtime_options)?;
     core.start().await?;
+    let registry = core.connection_registry();
+    telemetry::start_telemetry(registry);
     let mut tun_fd_runtime = None;
     if let Some(config) = tun_fd_config {
         match TunFdRuntime::start(config, core.tun_handle()) {
