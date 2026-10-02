@@ -1155,7 +1155,7 @@ mod tests {
         io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
         path::PathBuf,
         sync::Arc,
-        time::{Instant, SystemTime, UNIX_EPOCH},
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     use prost::Message;

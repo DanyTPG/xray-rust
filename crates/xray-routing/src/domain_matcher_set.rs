@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,6 +7,96 @@ use regex::Regex;
 use thiserror::Error;
 
 use crate::{DomainMatcher, DomainNameMode};
+
+/// Contiguous string arena holding sorted, deduplicated domain names.
+/// Reduces per-string heap allocation headers from ~16-32 bytes to zero,
+/// and eliminates allocator fragmentation when loading tens of thousands of domains.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct CompactDomainSet {
+    arena: Box<str>,
+    entries: Box<[CompactEntry]>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct CompactEntry {
+    pub offset: u32,
+    pub len: u16,
+}
+
+impl CompactDomainSet {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_iter<I: IntoIterator<Item = S>, S: AsRef<str>>(iter: I) -> Self {
+        let mut names: Vec<String> = iter.into_iter().map(|s| s.as_ref().to_owned()).collect();
+        if names.is_empty() {
+            return Self::default();
+        }
+        names.sort_unstable();
+        names.dedup();
+
+        let total_bytes: usize = names.iter().map(|s| s.len()).sum();
+        let mut arena = String::with_capacity(total_bytes);
+        let mut entries = Vec::with_capacity(names.len());
+
+        for name in names {
+            let offset = arena.len() as u32;
+            let len = name.len() as u16;
+            arena.push_str(&name);
+            entries.push(CompactEntry { offset, len });
+        }
+
+        Self {
+            arena: arena.into_boxed_str(),
+            entries: entries.into_boxed_slice(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[inline]
+    pub fn contains(&self, target: &str) -> bool {
+        if self.entries.is_empty() {
+            return false;
+        }
+        self.entries
+            .binary_search_by(|entry| {
+                let start = entry.offset as usize;
+                let end = start + entry.len as usize;
+                self.arena[start..end].cmp(target)
+            })
+            .is_ok()
+    }
+
+    #[inline]
+    pub fn pattern_bytes(&self) -> usize {
+        self.arena.len()
+    }
+
+    pub fn total_memory_bytes(&self) -> usize {
+        self.arena.len() + self.entries.len() * std::mem::size_of::<CompactEntry>()
+    }
+}
+
+impl fmt::Debug for CompactDomainSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set()
+            .entries((0..self.len()).map(|i| {
+                let e = &self.entries[i];
+                &self.arena[e.offset as usize..(e.offset as usize + e.len as usize)]
+            }))
+            .finish()
+    }
+}
 
 /// Small routing rules are more common than geosite-sized matcher sets. A
 /// linear scan avoids a hash lookup (and an ASCII-case normalization pass) for
@@ -32,8 +121,8 @@ pub struct DomainMatcherSet {
 
 struct DomainMatcherSetInner {
     linear: Option<Box<[DomainMatcher]>>,
-    full: HashSet<Box<str>>,
-    suffix: HashSet<Box<str>>,
+    full: CompactDomainSet,
+    suffix: CompactDomainSet,
     keywords: Vec<Box<str>>,
     keyword_automaton: Option<AhoCorasick>,
     regex: Vec<Regex>,
@@ -92,8 +181,8 @@ impl DomainMatcherSetInner {
         if let Some(matchers) = &self.linear {
             return matchers.iter().map(matcher_pattern_bytes).sum();
         }
-        self.full.iter().map(|name| name.len()).sum::<usize>()
-            + self.suffix.iter().map(|name| name.len()).sum::<usize>()
+        self.full.pattern_bytes()
+            + self.suffix.pattern_bytes()
             + self
                 .keywords
                 .iter()
@@ -208,8 +297,8 @@ pub enum DomainMatcherSetError {
 #[derive(Debug)]
 pub struct DomainMatcherSetBuilder {
     linear: Option<Vec<DomainMatcher>>,
-    full: HashSet<Box<str>>,
-    suffix: HashSet<Box<str>>,
+    full: Vec<Box<str>>,
+    suffix: Vec<Box<str>>,
     keywords: Vec<Box<str>>,
     regex: Vec<Regex>,
     matcher_count: usize,
@@ -219,8 +308,8 @@ impl Default for DomainMatcherSetBuilder {
     fn default() -> Self {
         Self {
             linear: Some(Vec::new()),
-            full: HashSet::new(),
-            suffix: HashSet::new(),
+            full: Vec::new(),
+            suffix: Vec::new(),
             keywords: Vec::new(),
             regex: Vec::new(),
             matcher_count: 0,
@@ -245,10 +334,10 @@ impl DomainMatcherSetBuilder {
         match matcher {
             DomainMatcher::Keyword(keyword) => self.keywords.push(lowercase_boxed(keyword)),
             DomainMatcher::Full(domain) => {
-                self.full.insert(lowercase_boxed(mode.pattern(domain)));
+                self.full.push(lowercase_boxed(mode.pattern(domain)));
             }
             DomainMatcher::Suffix(suffix) => {
-                self.suffix.insert(lowercase_boxed(mode.pattern(suffix)));
+                self.suffix.push(lowercase_boxed(mode.pattern(suffix)));
             }
             DomainMatcher::Regex(matcher) => self.regex.push(matcher.regex().clone()),
         }
@@ -268,8 +357,8 @@ impl DomainMatcherSetBuilder {
             if let Some(linear) = self.linear {
                 (
                     Some(linear.into_boxed_slice()),
-                    HashSet::new(),
-                    HashSet::new(),
+                    CompactDomainSet::default(),
+                    CompactDomainSet::default(),
                     Vec::new(),
                     None,
                     Vec::new(),
@@ -287,8 +376,8 @@ impl DomainMatcherSetBuilder {
                 };
                 (
                     None,
-                    self.full,
-                    self.suffix,
+                    CompactDomainSet::from_iter(self.full),
+                    CompactDomainSet::from_iter(self.suffix),
                     self.keywords,
                     keyword_automaton,
                     self.regex,
@@ -388,17 +477,12 @@ mod tests {
         .unwrap()
     }
 
-    fn table_bytes(set: &HashSet<Box<str>>) -> usize {
-        let buckets = if set.capacity() == 0 {
-            0
-        } else {
-            (set.capacity() * 8).div_ceil(7).next_power_of_two()
-        };
-        buckets * (size_of::<Box<str>>() + 1)
+    fn table_bytes(set: &CompactDomainSet) -> usize {
+        set.entries.len() * size_of::<CompactEntry>()
     }
 
-    fn heap_bytes(set: &HashSet<Box<str>>) -> usize {
-        set.iter().map(|name| name.len()).sum()
+    fn heap_bytes(set: &CompactDomainSet) -> usize {
+        set.arena.len()
     }
 
     #[test]
