@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,92 +9,199 @@ use thiserror::Error;
 
 use crate::{DomainMatcher, DomainNameMode};
 
-/// Contiguous string arena holding sorted, deduplicated domain names.
-/// Reduces per-string heap allocation headers from ~16-32 bytes to zero,
-/// and eliminates allocator fragmentation when loading tens of thousands of domains.
+/// Flat contiguous reversed-label domain trie.
+/// Domains are traversed by labels in reverse order (e.g., `com` -> `example` -> `api`),
+/// allowing all subdomains to naturally share parent nodes.
+/// Stored in a single flat contiguous array of nodes with an underlying string arena.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct CompactDomainSet {
+pub struct ReversedDomainTrie {
     arena: Box<str>,
-    entries: Box<[CompactEntry]>,
+    nodes: Box<[FlatTrieNode]>,
+    pub full_count: usize,
+    pub suffix_count: usize,
+    pub pattern_bytes: usize,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct CompactEntry {
-    pub offset: u32,
-    pub len: u16,
+pub struct FlatTrieNode {
+    pub label_offset: u32,
+    pub first_child: u32,
+    pub num_children: u32,
+    pub label_len: u16,
+    pub flags: u16, // bit 0: is_suffix, bit 1: is_full
 }
 
-impl CompactDomainSet {
-    pub fn new() -> Self {
-        Self::default()
-    }
+#[derive(Debug, Default)]
+pub struct TrieBuilderNode {
+    label: String,
+    flags: u16,
+    children: Vec<TrieBuilderNode>,
+}
 
-    pub fn from_iter<I: IntoIterator<Item = S>, S: AsRef<str>>(iter: I) -> Self {
-        let mut names: Vec<String> = iter.into_iter().map(|s| s.as_ref().to_owned()).collect();
-        if names.is_empty() {
-            return Self::default();
+impl TrieBuilderNode {
+    fn insert<'a>(&mut self, mut labels: impl Iterator<Item = &'a str>, flag: u16) {
+        let Some(label) = labels.next() else {
+            self.flags |= flag;
+            return;
+        };
+
+        if let Some(child) = self.children.iter_mut().find(|c| c.label == label) {
+            child.insert(labels, flag);
+        } else {
+            let mut child = TrieBuilderNode {
+                label: label.to_owned(),
+                flags: 0,
+                children: Vec::new(),
+            };
+            child.insert(labels, flag);
+            self.children.push(child);
         }
-        names.sort_unstable();
-        names.dedup();
+    }
+}
 
-        let total_bytes: usize = names.iter().map(|s| s.len()).sum();
-        let mut arena = String::with_capacity(total_bytes);
-        let mut entries = Vec::with_capacity(names.len());
+impl ReversedDomainTrie {
+    pub fn build(
+        mut root: TrieBuilderNode,
+        full_count: usize,
+        suffix_count: usize,
+        pattern_bytes: usize,
+    ) -> Self {
+        if root.children.is_empty() && root.flags == 0 {
+            return Self {
+                arena: Box::default(),
+                nodes: Box::default(),
+                full_count,
+                suffix_count,
+                pattern_bytes,
+            };
+        }
 
-        for name in names {
-            let offset = arena.len() as u32;
-            let len = name.len() as u16;
-            arena.push_str(&name);
-            entries.push(CompactEntry { offset, len });
+        let mut arena = String::new();
+        let mut flat_nodes = Vec::new();
+
+        root.children.sort_unstable_by(|a, b| a.label.cmp(&b.label));
+
+        // Node 0: Root node
+        flat_nodes.push(FlatTrieNode {
+            label_offset: 0,
+            first_child: 0,
+            num_children: root.children.len() as u32,
+            label_len: 0,
+            flags: root.flags,
+        });
+
+        let mut queue = VecDeque::new();
+        if !root.children.is_empty() {
+            queue.push_back((0usize, root.children));
+        }
+
+        while let Some((parent_idx, mut children)) = queue.pop_front() {
+            let first_child_idx = flat_nodes.len() as u32;
+            flat_nodes[parent_idx].first_child = first_child_idx;
+
+            for child in &mut children {
+                child.children.sort_unstable_by(|a, b| a.label.cmp(&b.label));
+            }
+
+            let start = flat_nodes.len();
+            for child in &children {
+                let label_offset = arena.len() as u32;
+                let label_len = child.label.len() as u16;
+                arena.push_str(&child.label);
+
+                flat_nodes.push(FlatTrieNode {
+                    label_offset,
+                    first_child: 0,
+                    num_children: child.children.len() as u32,
+                    label_len,
+                    flags: child.flags,
+                });
+            }
+
+            for (i, child) in children.into_iter().enumerate() {
+                if !child.children.is_empty() {
+                    queue.push_back((start + i, child.children));
+                }
+            }
         }
 
         Self {
             arena: arena.into_boxed_str(),
-            entries: entries.into_boxed_slice(),
+            nodes: flat_nodes.into_boxed_slice(),
+            full_count,
+            suffix_count,
+            pattern_bytes,
         }
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.nodes.is_empty()
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[inline]
-    pub fn contains(&self, target: &str) -> bool {
-        if self.entries.is_empty() {
-            return false;
-        }
-        self.entries
-            .binary_search_by(|entry| {
-                let start = entry.offset as usize;
-                let end = start + entry.len as usize;
-                self.arena[start..end].cmp(target)
-            })
-            .is_ok()
+        self.full_count + self.suffix_count
     }
 
     #[inline]
     pub fn pattern_bytes(&self) -> usize {
-        self.arena.len()
+        self.pattern_bytes
     }
 
     pub fn total_memory_bytes(&self) -> usize {
-        self.arena.len() + self.entries.len() * std::mem::size_of::<CompactEntry>()
+        self.arena.len() + self.nodes.len() * std::mem::size_of::<FlatTrieNode>()
+    }
+
+    pub fn matches(&self, domain: &str) -> bool {
+        if self.nodes.is_empty() {
+            return false;
+        }
+
+        let mut current_idx = 0;
+
+        for label in domain.rsplit('.') {
+            let current = &self.nodes[current_idx];
+            if current.num_children == 0 {
+                return false;
+            }
+            let children_start = current.first_child as usize;
+            let children_end = children_start + current.num_children as usize;
+            let children = &self.nodes[children_start..children_end];
+
+            let found = children.binary_search_by(|child| {
+                let start = child.label_offset as usize;
+                let end = start + child.label_len as usize;
+                let child_label = &self.arena[start..end];
+                child_label.cmp(label)
+            });
+
+            match found {
+                Ok(child_offset) => {
+                    let next_idx = children_start + child_offset;
+                    let next_node = &self.nodes[next_idx];
+                    if (next_node.flags & 1) != 0 {
+                        // Suffix matched
+                        return true;
+                    }
+                    current_idx = next_idx;
+                }
+                Err(_) => return false,
+            }
+        }
+
+        // Reached end of all labels: check full match flag (bit 1)
+        (self.nodes[current_idx].flags & 2) != 0
     }
 }
 
-impl fmt::Debug for CompactDomainSet {
+impl fmt::Debug for ReversedDomainTrie {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_set()
-            .entries((0..self.len()).map(|i| {
-                let e = &self.entries[i];
-                &self.arena[e.offset as usize..(e.offset as usize + e.len as usize)]
-            }))
+        f.debug_struct("ReversedDomainTrie")
+            .field("nodes", &self.nodes.len())
+            .field("full_count", &self.full_count)
+            .field("suffix_count", &self.suffix_count)
+            .field("arena_bytes", &self.arena.len())
             .finish()
     }
 }
@@ -121,8 +229,7 @@ pub struct DomainMatcherSet {
 
 struct DomainMatcherSetInner {
     linear: Option<Box<[DomainMatcher]>>,
-    full: CompactDomainSet,
-    suffix: CompactDomainSet,
+    trie: ReversedDomainTrie,
     keywords: Vec<Box<str>>,
     keyword_automaton: Option<AhoCorasick>,
     regex: Vec<Regex>,
@@ -155,6 +262,14 @@ impl DomainMatcherSet {
         self.matcher_count
     }
 
+    pub fn full_count(&self) -> usize {
+        self.inner.as_ref().map_or(0, |inner| inner.full_count())
+    }
+
+    pub fn suffix_count(&self) -> usize {
+        self.inner.as_ref().map_or(0, |inner| inner.suffix_count())
+    }
+
     /// Returns the retained pattern payload in bytes, excluding hash-table,
     /// automaton and regex-engine overhead.
     pub fn pattern_bytes(&self) -> usize {
@@ -169,8 +284,7 @@ impl DomainMatcherSet {
             return matchers.iter().any(|matcher| matcher.matches(domain));
         }
         let domain = lowercase_ascii(domain);
-        inner.full.contains(domain.as_ref())
-            || inner.matches_suffix(&domain)
+        inner.trie.matches(&domain)
             || inner.matches_keyword(&domain)
             || inner.matches_regex(&domain)
     }
@@ -181,8 +295,7 @@ impl DomainMatcherSetInner {
         if let Some(matchers) = &self.linear {
             return matchers.iter().map(matcher_pattern_bytes).sum();
         }
-        self.full.pattern_bytes()
-            + self.suffix.pattern_bytes()
+        self.trie.pattern_bytes()
             + self
                 .keywords
                 .iter()
@@ -195,12 +308,14 @@ impl DomainMatcherSetInner {
                 .sum::<usize>()
     }
 
-    fn matches_suffix(&self, domain: &str) -> bool {
-        !self.suffix.is_empty()
-            && (self.suffix.contains(domain)
-                || domain
-                    .rmatch_indices('.')
-                    .any(|(index, _)| self.suffix.contains(&domain[index + 1..])))
+    fn full_count(&self) -> usize {
+        self.trie.full_count
+            + self.matcher_kind_count(|matcher| matches!(matcher, DomainMatcher::Full(_)))
+    }
+
+    fn suffix_count(&self) -> usize {
+        self.trie.suffix_count
+            + self.matcher_kind_count(|matcher| matches!(matcher, DomainMatcher::Suffix(_)))
     }
 
     fn matches_keyword(&self, domain: &str) -> bool {
@@ -226,23 +341,8 @@ impl fmt::Debug for DomainMatcherSet {
             self.inner.as_ref().map_or(0, |inner| select(inner))
         };
         f.debug_struct("DomainMatcherSet")
-            .field(
-                "full",
-                &counts(|inner| {
-                    inner.full.len()
-                        + inner
-                            .matcher_kind_count(|matcher| matches!(matcher, DomainMatcher::Full(_)))
-                }),
-            )
-            .field(
-                "suffix",
-                &counts(|inner| {
-                    inner.suffix.len()
-                        + inner.matcher_kind_count(|matcher| {
-                            matches!(matcher, DomainMatcher::Suffix(_))
-                        })
-                }),
-            )
+            .field("full", &counts(|inner| inner.full_count()))
+            .field("suffix", &counts(|inner| inner.suffix_count()))
             .field(
                 "keyword",
                 &counts(|inner| {
@@ -273,8 +373,7 @@ impl PartialEq for DomainMatcherSet {
                 (None, None) => true,
                 (Some(a), Some(b)) => {
                     a.linear == b.linear
-                        && a.full == b.full
-                        && a.suffix == b.suffix
+                        && a.trie == b.trie
                         && a.keywords == b.keywords
                         && a.regex
                             .iter()
@@ -297,8 +396,12 @@ pub enum DomainMatcherSetError {
 #[derive(Debug)]
 pub struct DomainMatcherSetBuilder {
     linear: Option<Vec<DomainMatcher>>,
-    full: Vec<Box<str>>,
-    suffix: Vec<Box<str>>,
+    trie_root: TrieBuilderNode,
+    seen_full: HashSet<Box<str>>,
+    seen_suffix: HashSet<Box<str>>,
+    full_count: usize,
+    suffix_count: usize,
+    pattern_bytes: usize,
     keywords: Vec<Box<str>>,
     regex: Vec<Regex>,
     matcher_count: usize,
@@ -308,8 +411,12 @@ impl Default for DomainMatcherSetBuilder {
     fn default() -> Self {
         Self {
             linear: Some(Vec::new()),
-            full: Vec::new(),
-            suffix: Vec::new(),
+            trie_root: TrieBuilderNode::default(),
+            seen_full: HashSet::new(),
+            seen_suffix: HashSet::new(),
+            full_count: 0,
+            suffix_count: 0,
+            pattern_bytes: 0,
             keywords: Vec::new(),
             regex: Vec::new(),
             matcher_count: 0,
@@ -334,10 +441,20 @@ impl DomainMatcherSetBuilder {
         match matcher {
             DomainMatcher::Keyword(keyword) => self.keywords.push(lowercase_boxed(keyword)),
             DomainMatcher::Full(domain) => {
-                self.full.push(lowercase_boxed(mode.pattern(domain)));
+                let pattern = lowercase_ascii(mode.pattern(domain));
+                if self.seen_full.insert(pattern.as_ref().into()) {
+                    self.pattern_bytes += pattern.len();
+                    self.full_count += 1;
+                }
+                self.trie_root.insert(pattern.rsplit('.'), 2);
             }
             DomainMatcher::Suffix(suffix) => {
-                self.suffix.push(lowercase_boxed(mode.pattern(suffix)));
+                let pattern = lowercase_ascii(mode.pattern(suffix));
+                if self.seen_suffix.insert(pattern.as_ref().into()) {
+                    self.pattern_bytes += pattern.len();
+                    self.suffix_count += 1;
+                }
+                self.trie_root.insert(pattern.rsplit('.'), 1);
             }
             DomainMatcher::Regex(matcher) => self.regex.push(matcher.regex().clone()),
         }
@@ -353,12 +470,11 @@ impl DomainMatcherSetBuilder {
             return Ok(DomainMatcherSet::default());
         }
         let matcher_count = self.matcher_count;
-        let (linear, full, suffix, keywords, keyword_automaton, regex) =
+        let (linear, trie, keywords, keyword_automaton, regex) =
             if let Some(linear) = self.linear {
                 (
                     Some(linear.into_boxed_slice()),
-                    CompactDomainSet::default(),
-                    CompactDomainSet::default(),
+                    ReversedDomainTrie::default(),
                     Vec::new(),
                     None,
                     Vec::new(),
@@ -376,8 +492,12 @@ impl DomainMatcherSetBuilder {
                 };
                 (
                     None,
-                    CompactDomainSet::from_iter(self.full),
-                    CompactDomainSet::from_iter(self.suffix),
+                    ReversedDomainTrie::build(
+                        self.trie_root,
+                        self.full_count,
+                        self.suffix_count,
+                        self.pattern_bytes,
+                    ),
                     self.keywords,
                     keyword_automaton,
                     self.regex,
@@ -386,8 +506,7 @@ impl DomainMatcherSetBuilder {
         Ok(DomainMatcherSet {
             inner: Some(Arc::new(DomainMatcherSetInner {
                 linear,
-                full,
-                suffix,
+                trie,
                 keywords,
                 keyword_automaton,
                 regex,
@@ -477,12 +596,12 @@ mod tests {
         .unwrap()
     }
 
-    fn table_bytes(set: &CompactDomainSet) -> usize {
-        set.entries.len() * size_of::<CompactEntry>()
+    fn table_bytes(trie: &ReversedDomainTrie) -> usize {
+        trie.nodes.len() * size_of::<FlatTrieNode>()
     }
 
-    fn heap_bytes(set: &CompactDomainSet) -> usize {
-        set.arena.len()
+    fn heap_bytes(trie: &ReversedDomainTrie) -> usize {
+        trie.arena.len()
     }
 
     #[test]
@@ -503,8 +622,7 @@ mod tests {
         let inner = set.inner.as_deref().unwrap();
 
         assert_eq!(inner.linear.as_deref().unwrap().len(), 5);
-        assert!(inner.full.is_empty());
-        assert!(inner.suffix.is_empty());
+        assert!(inner.trie.is_empty());
         assert!(inner.keywords.is_empty());
         assert!(inner.keyword_automaton.is_none());
         assert!(inner.regex.is_empty());
@@ -527,7 +645,7 @@ mod tests {
         let inner = set.inner.as_deref().unwrap();
 
         assert!(inner.linear.is_none());
-        assert_eq!(inner.full.len(), LINEAR_MATCHER_LIMIT + 1);
+        assert_eq!(inner.full_count(), LINEAR_MATCHER_LIMIT + 1);
         assert!(set.matches("HOST-8.TEST"));
         assert!(!set.matches("missing.test"));
     }
@@ -707,8 +825,8 @@ mod tests {
         assert_eq!(set.matcher_count(), 122_200);
         let inner = set.inner.as_deref().unwrap();
 
-        let name_table_bytes = table_bytes(&inner.full) + table_bytes(&inner.suffix);
-        let name_heap_bytes = heap_bytes(&inner.full) + heap_bytes(&inner.suffix);
+        let name_table_bytes = table_bytes(&inner.trie);
+        let name_heap_bytes = heap_bytes(&inner.trie);
         let keyword_list_bytes = inner.keywords.capacity() * size_of::<Box<str>>()
             + inner
                 .keywords
