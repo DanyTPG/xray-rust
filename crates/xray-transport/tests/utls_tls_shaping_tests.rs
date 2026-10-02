@@ -266,6 +266,21 @@ mod utls_tls_shaping_tests {
     }
 
     #[test]
+    fn unsafe_fingerprint_with_custom_cipher_suites() {
+        let mut conf = config("unsafe", &[]);
+        conf.cipher_suites = vec!["TLS_CHACHA20_POLY1305_SHA256".to_owned()];
+
+        let hello = plain_tls_client_hello_bytes(&conf)
+            .expect("unsafe ClientHello with custom cipherSuites must be produced");
+
+        assert_eq!(
+            cipher_suites(&hello),
+            vec![0x1303],
+            "unsafe fingerprint must negotiate custom cipher suites without uTLS shaping"
+        );
+    }
+
+    #[test]
     fn legacy_cipher_advertisement_is_supported_for_every_selectable_profile() {
         for fingerprint in selectable_fingerprints() {
             let hello = plain_tls_client_hello_bytes(&config(fingerprint, &[]))

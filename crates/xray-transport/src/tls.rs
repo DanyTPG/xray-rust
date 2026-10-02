@@ -897,12 +897,32 @@ fn unshaped_client_config(
     pinned_peer_cert_sha256: &[[u8; 32]],
     verify_peer_cert_by_name: &[String],
 ) -> Result<rustls::ClientConfig, TransportError> {
+    let mut versions = Vec::new();
+    if provider
+        .cipher_suites
+        .iter()
+        .any(|cs| cs.version().version == rustls::ProtocolVersion::TLSv1_3)
+    {
+        versions.push(&rustls::version::TLS13);
+    }
+    if provider
+        .cipher_suites
+        .iter()
+        .any(|cs| cs.version().version == rustls::ProtocolVersion::TLSv1_2)
+    {
+        versions.push(&rustls::version::TLS12);
+    }
+    if versions.is_empty() {
+        return Err(TransportError::TlsConfig(
+            "no protocol versions supported by the configured cipher suites".to_owned(),
+        ));
+    }
     client_config_with_provider(
         provider,
         allow_insecure,
         pinned_peer_cert_sha256,
         verify_peer_cert_by_name,
-        rustls::DEFAULT_VERSIONS,
+        &versions,
     )
 }
 
