@@ -495,6 +495,7 @@ pub(crate) fn dns_tls_client_config(server: &NameServer) -> TlsClientConfig {
         verify_peer_cert_by_name: Vec::new(),
         alpn: Vec::new(),
         fingerprint: None,
+        cipher_suites: Vec::new(),
     }
 }
 

@@ -317,6 +317,7 @@ pub(crate) enum DnsTcpConnector {
         verify_peer_cert_by_name: Vec<String>,
         alpn: Vec<String>,
         fingerprint: Option<String>,
+        cipher_suites: Vec<String>,
     },
 }
 
@@ -478,6 +479,7 @@ impl DnsOutbound {
                 verify_peer_cert_by_name,
                 alpn,
                 fingerprint,
+                cipher_suites,
             } => {
                 let server_name = match &target.addr {
                     RoutingTargetAddr::Domain(domain) if !domain.is_empty() => domain.clone(),
@@ -493,6 +495,7 @@ impl DnsOutbound {
                     verify_peer_cert_by_name: verify_peer_cert_by_name.clone(),
                     alpn: alpn.clone(),
                     fingerprint: fingerprint.clone(),
+                    cipher_suites: cipher_suites.clone(),
                 }))
             }
         }
@@ -3336,6 +3339,7 @@ fn dns_tcp_connector(stream: &StreamSettings) -> Result<DnsTcpConnector, CoreErr
                     verify_peer_cert_by_name: tls.verify_peer_cert_by_name.clone(),
                     alpn: tls.alpn.clone(),
                     fingerprint: tls.fingerprint.clone(),
+                    cipher_suites: tls.cipher_suites.clone(),
                 }),
             )),
             Some(_) | None => Ok(DnsTcpConnector::TlsFromTarget {
@@ -3344,6 +3348,7 @@ fn dns_tcp_connector(stream: &StreamSettings) -> Result<DnsTcpConnector, CoreErr
                 verify_peer_cert_by_name: tls.verify_peer_cert_by_name.clone(),
                 alpn: tls.alpn.clone(),
                 fingerprint: tls.fingerprint.clone(),
+                cipher_suites: tls.cipher_suites.clone(),
             }),
         },
         StreamSecurity::Reality(reality) => Ok(DnsTcpConnector::Static(ConnectorConfig::Reality(
@@ -4209,6 +4214,7 @@ mod tests {
                 verify_peer_cert_by_name: vec!["resolver-cert.example".to_owned()],
                 alpn: Vec::new(),
                 fingerprint: None,
+                cipher_suites: Vec::new(),
             })
         );
         assert!(!explicit.supports_direct_udp());
@@ -4226,6 +4232,7 @@ mod tests {
                         pinned_peer_cert_sha256: vec![[0x22; 32]],
                         verify_peer_cert_by_name: vec!["dynamic-cert.example".to_owned()],
                         alpn: Vec::new(),
+                        cipher_suites: Vec::new(),
                     }),
                     quic_params: None,
                     socket_options: None,
@@ -4244,6 +4251,7 @@ mod tests {
                     verify_peer_cert_by_name: vec!["dynamic-cert.example".to_owned()],
                     alpn: Vec::new(),
                     fingerprint: None,
+                    cipher_suites: Vec::new(),
                 })
             );
         }
@@ -4261,6 +4269,7 @@ mod tests {
                 pinned_peer_cert_sha256: vec![[0x33; 32]],
                 verify_peer_cert_by_name: vec!["cert.example".to_owned()],
                 alpn: vec!["http/1.1".to_owned()],
+                cipher_suites: Vec::new(),
             }),
             quic_params: None,
             socket_options: None,

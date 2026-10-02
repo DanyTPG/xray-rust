@@ -303,6 +303,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         }
     }
 
@@ -490,6 +491,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
 
         let stream = connector
@@ -524,6 +526,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
 
         let stream = connector
@@ -550,6 +553,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
 
         let stream = connector
@@ -579,6 +583,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
 
         let result = connector.connect(&target, &config).await;
@@ -602,6 +607,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
 
         let result = connector.connect(&target, &config).await;
@@ -627,6 +633,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         });
 
         let stream = dialer
@@ -739,6 +746,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         });
         let race_config = happy_eyeballs_config(Duration::from_secs(60));
 
@@ -788,6 +796,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
         let race_config = happy_eyeballs_config(Duration::from_secs(60));
 
@@ -815,6 +824,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         };
         let scoped = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 9, 17, 42));
         let result = connector.connect_socket_addr(scoped, &config).await;
@@ -1008,6 +1018,7 @@ mod transport_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: None,
+            cipher_suites: Vec::new(),
         }));
         let target = Target::new(
             TargetAddr::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),

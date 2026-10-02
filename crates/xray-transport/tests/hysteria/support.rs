@@ -24,6 +24,7 @@ pub fn tls_settings() -> TlsClientConfig {
         verify_peer_cert_by_name: vec![],
         alpn: vec![],
         fingerprint: None,
+        cipher_suites: vec![],
     }
 }
 

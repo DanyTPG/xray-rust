@@ -89,6 +89,7 @@ impl HysteriaOutbound {
                     verify_peer_cert_by_name: tls.verify_peer_cert_by_name.clone(),
                     alpn: vec!["h3".into()],
                     fingerprint: None,
+                    cipher_suites: Vec::new(),
                 },
                 auth: auth.clone(),
                 session: Mutex::new(None),

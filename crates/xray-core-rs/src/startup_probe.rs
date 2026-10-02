@@ -194,6 +194,7 @@ async fn run_startup_probe_inner(
                     verify_peer_cert_by_name: Vec::new(),
                     alpn: Vec::new(),
                     fingerprint: None,
+                    cipher_suites: Vec::new(),
                 },
             ),
         )

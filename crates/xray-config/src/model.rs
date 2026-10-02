@@ -1153,6 +1153,8 @@ pub struct TlsSettings {
     pub allow_insecure: bool,
     /// `tlsSettings.alpn`, verbatim.
     pub alpn: Vec<String>,
+    /// Colon-separated list of supported cipher suites from `tlsSettings.cipherSuites`.
+    pub cipher_suites: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

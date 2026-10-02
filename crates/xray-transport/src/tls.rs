@@ -46,6 +46,7 @@ struct ClientConfigKey {
     verify_peer_cert_by_name: Vec<String>,
     alpn: Vec<String>,
     fingerprint: Option<String>,
+    cipher_suites: Vec<String>,
     alpn_policy: TlsAlpnPolicy,
 }
 
@@ -243,6 +244,7 @@ impl TlsConnector {
                     verify_peer_cert_by_name,
                     alpn,
                     fingerprint,
+                    cipher_suites,
                 } = config;
                 let key = ClientConfigKey {
                     allow_insecure: *allow_insecure,
@@ -250,6 +252,7 @@ impl TlsConnector {
                     verify_peer_cert_by_name: verify_peer_cert_by_name.clone(),
                     alpn: alpn.clone(),
                     fingerprint: fingerprint.clone(),
+                    cipher_suites: cipher_suites.clone(),
                     alpn_policy,
                 };
 
@@ -659,9 +662,19 @@ fn build_client_config(
 ) -> Result<rustls::ClientConfig, TransportError> {
     let client_config = match crate::utls_tls::shaping_profile(config.fingerprint.as_deref())? {
         Some((fingerprint, profile)) => {
+            let mut provider = shaping_crypto_provider();
+            let cipher_override =
+                apply_cipher_suites_override(&mut provider, &config.cipher_suites)?;
+            let has_cipher_override = cipher_override.is_some();
             let versions = profile_protocol_versions(profile);
-            let provider = Arc::new(shaping_crypto_provider());
-            reject_unnegotiable_fingerprint(fingerprint, profile, &provider, versions)?;
+            let provider = Arc::new(provider);
+            reject_unnegotiable_fingerprint(
+                fingerprint,
+                profile,
+                &provider,
+                versions,
+                has_cipher_override,
+            )?;
 
             let mut client_config = shaped_client_config(
                 provider,
@@ -675,12 +688,20 @@ fn build_client_config(
                 &mut client_config.cert_decompressors,
             );
             client_config.client_hello_customizer = Some(Arc::new(
-                crate::utls_tls::UtlsClientHelloCustomizer::new(profile, &config.alpn, alpn_policy),
+                crate::utls_tls::UtlsClientHelloCustomizer::new(
+                    profile,
+                    &config.alpn,
+                    alpn_policy,
+                    cipher_override,
+                ),
             ));
             client_config
         }
         None => {
+            let mut provider = rustls::crypto::ring::default_provider();
+            let _ = apply_cipher_suites_override(&mut provider, &config.cipher_suites)?;
             let mut client_config = unshaped_client_config(
+                Arc::new(provider),
                 config.allow_insecure,
                 &config.pinned_peer_cert_sha256,
                 &config.verify_peer_cert_by_name,
@@ -763,14 +784,95 @@ fn profile_protocol_versions(
 /// `versions` is part of the question rather than context for it: a suite this
 /// provider implements only for the version the profile just gave up is a suite
 /// this connection cannot reach.
+pub(crate) fn parse_cipher_suite_id(raw: &str) -> Option<u16> {
+    let normalized = raw.trim().replace('-', "_").to_ascii_uppercase();
+    match normalized.as_str() {
+        // TLS 1.3
+        "TLS_AES_128_GCM_SHA256" | "AES_128_GCM_SHA256" => Some(0x1301),
+        "TLS_AES_256_GCM_SHA384" | "AES_256_GCM_SHA384" => Some(0x1302),
+        "TLS_CHACHA20_POLY1305_SHA256" | "CHACHA20_POLY1305_SHA256" => Some(0x1303),
+
+        // TLS 1.0 - 1.2
+        "TLS_RSA_WITH_RC4_128_SHA" | "RSA_WITH_RC4_128_SHA" => Some(0x0005),
+        "TLS_RSA_WITH_3DES_EDE_CBC_SHA" | "RSA_WITH_3DES_EDE_CBC_SHA" => Some(0x000a),
+        "TLS_RSA_WITH_AES_128_CBC_SHA" | "RSA_WITH_AES_128_CBC_SHA" => Some(0x002f),
+        "TLS_RSA_WITH_AES_256_CBC_SHA" | "RSA_WITH_AES_256_CBC_SHA" => Some(0x0035),
+        "TLS_RSA_WITH_AES_128_CBC_SHA256" | "RSA_WITH_AES_128_CBC_SHA256" => Some(0x003c),
+        "TLS_RSA_WITH_AES_128_GCM_SHA256" | "RSA_WITH_AES_128_GCM_SHA256" => Some(0x009c),
+        "TLS_RSA_WITH_AES_256_GCM_SHA384" | "RSA_WITH_AES_256_GCM_SHA384" => Some(0x009d),
+        "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA" | "ECDHE_ECDSA_WITH_RC4_128_SHA" => Some(0xc007),
+        "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA" | "ECDHE_ECDSA_WITH_AES_128_CBC_SHA" => Some(0xc009),
+        "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA" | "ECDHE_ECDSA_WITH_AES_256_CBC_SHA" => Some(0xc00a),
+        "TLS_ECDHE_RSA_WITH_RC4_128_SHA" | "ECDHE_RSA_WITH_RC4_128_SHA" => Some(0xc011),
+        "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA" | "ECDHE_RSA_WITH_3DES_EDE_CBC_SHA" => Some(0xc012),
+        "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA" | "ECDHE_RSA_WITH_AES_128_CBC_SHA" => Some(0xc013),
+        "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA" | "ECDHE_RSA_WITH_AES_256_CBC_SHA" => Some(0xc014),
+        "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256" | "ECDHE_ECDSA_WITH_AES_128_CBC_SHA256" => Some(0xc023),
+        "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256" | "ECDHE_RSA_WITH_AES_128_CBC_SHA256" => Some(0xc027),
+        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" | "ECDHE_RSA_WITH_AES_128_GCM_SHA256" => Some(0xc02f),
+        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" | "ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" => Some(0xc02b),
+        "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384" | "ECDHE_RSA_WITH_AES_256_GCM_SHA384" => Some(0xc030),
+        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384" | "ECDHE_ECDSA_WITH_AES_256_GCM_SHA384" => Some(0xc02c),
+        "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256" | "ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256" => Some(0xcca8),
+        "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256" | "ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256" => Some(0xcca9),
+        _ => None,
+    }
+}
+
+fn apply_cipher_suites_override(
+    provider: &mut crypto::CryptoProvider,
+    configured_suites: &[String],
+) -> Result<Option<Vec<u16>>, TransportError> {
+    if configured_suites.is_empty() {
+        return Ok(None);
+    }
+    let custom_ids: Vec<u16> = configured_suites
+        .iter()
+        .filter_map(|s| parse_cipher_suite_id(s))
+        .collect();
+    if custom_ids.is_empty() {
+        return Err(TransportError::TlsConfig(format!(
+            "none of the configured cipherSuites are recognized: {:?}",
+            configured_suites
+        )));
+    }
+
+    let mut filtered = Vec::new();
+    for &id in &custom_ids {
+        if let Some(s) = provider
+            .cipher_suites
+            .iter()
+            .find(|s| u16::from(s.suite()) == id)
+        {
+            if !filtered
+                .iter()
+                .any(|existing: &rustls::SupportedCipherSuite| existing.suite() == s.suite())
+            {
+                filtered.push(*s);
+            }
+        }
+    }
+
+    if filtered.is_empty() {
+        return Err(TransportError::TlsConfig(format!(
+            "none of the configured cipherSuites are supported by TLS crypto provider: {:?}",
+            configured_suites
+        )));
+    }
+
+    provider.cipher_suites = filtered;
+    Ok(Some(custom_ids))
+}
+
 fn reject_unnegotiable_fingerprint(
     fingerprint: &str,
     profile: &UtlsClientHelloProfile,
     provider: &crypto::CryptoProvider,
     versions: &[&'static rustls::SupportedProtocolVersion],
+    has_cipher_override: bool,
 ) -> Result<(), TransportError> {
     let negotiable = provider.cipher_suites.iter().any(|suite| {
-        profile.cipher_suites.contains(&u16::from(suite.suite()))
+        (has_cipher_override || profile.cipher_suites.contains(&u16::from(suite.suite())))
             && versions
                 .iter()
                 .any(|version| version.version == suite.version().version)
@@ -790,12 +892,13 @@ fn reject_unnegotiable_fingerprint(
 /// branch on *ring* is what makes "no shaping" reproduce the pre-shaping
 /// ClientHello exactly.
 fn unshaped_client_config(
+    provider: Arc<crypto::CryptoProvider>,
     allow_insecure: bool,
     pinned_peer_cert_sha256: &[[u8; 32]],
     verify_peer_cert_by_name: &[String],
 ) -> Result<rustls::ClientConfig, TransportError> {
     client_config_with_provider(
-        Arc::new(rustls::crypto::ring::default_provider()),
+        provider,
         allow_insecure,
         pinned_peer_cert_sha256,
         verify_peer_cert_by_name,
@@ -998,6 +1101,7 @@ mod http3_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: alpn.iter().map(|value| (*value).to_owned()).collect(),
             fingerprint: fingerprint.map(str::to_owned),
+            cipher_suites: Vec::new(),
         }
     }
 

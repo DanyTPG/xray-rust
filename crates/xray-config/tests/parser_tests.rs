@@ -2112,6 +2112,25 @@ fn parses_tls_alpn_list() {
 }
 
 #[test]
+fn parses_tls_cipher_suites() {
+    let raw = raw_with_tls_settings(
+        r#""serverName": "server.example", "cipherSuites": "TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256""#,
+    );
+    let parsed = parse_xray_json(&raw).expect("a TLS cipherSuites string should be accepted");
+
+    let StreamSecurity::Tls(tls) = &parsed.config.outbounds[0].stream.security else {
+        panic!("expected tls security");
+    };
+    assert_eq!(
+        tls.cipher_suites,
+        [
+            "TLS_CHACHA20_POLY1305_SHA256".to_owned(),
+            "TLS_AES_128_GCM_SHA256".to_owned()
+        ]
+    );
+}
+
+#[test]
 fn rejects_unsupported_tls_fingerprint_with_path() {
     let raw =
         raw_with_tls_settings(r#""serverName": "server.example", "fingerprint": "nosuchbrowser""#);

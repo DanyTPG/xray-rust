@@ -8,7 +8,8 @@
 
 use rand::{rngs::OsRng, RngCore};
 use rustls::client::{
-    ClientHelloContext, ClientHelloCustomizer, ClientHelloPlan, ClientHelloSessionId,
+    ClientHelloCipherSuites, ClientHelloContext, ClientHelloCustomizer, ClientHelloPlan,
+    ClientHelloSessionId, ClientHelloSupportedVersions,
 };
 use rustls::Error as RustlsError;
 
@@ -73,6 +74,7 @@ pub(crate) fn shaping_profile(
 pub(crate) struct UtlsClientHelloCustomizer {
     profile: &'static UtlsClientHelloProfile,
     alpn_override: Option<Vec<Vec<u8>>>,
+    cipher_suites_override: Option<Vec<u16>>,
 }
 
 impl UtlsClientHelloCustomizer {
@@ -80,10 +82,12 @@ impl UtlsClientHelloCustomizer {
         profile: &'static UtlsClientHelloProfile,
         alpn: &[String],
         policy: TlsAlpnPolicy,
+        cipher_suites_override: Option<Vec<u16>>,
     ) -> Self {
         Self {
             profile,
             alpn_override: alpn_override_for(alpn, policy),
+            cipher_suites_override,
         }
     }
 }
@@ -153,6 +157,46 @@ impl ClientHelloCustomizer for UtlsClientHelloCustomizer {
         context: ClientHelloContext<'_>,
     ) -> Result<Option<ClientHelloPlan>, RustlsError> {
         let mut plan = apply_utls_profile(ClientHelloPlan::new(), self.profile, context)?;
+
+        if let Some(custom_ciphers) = &self.cipher_suites_override {
+            let mut suites = Vec::new();
+            for &suite_id in custom_ciphers {
+                if context
+                    .crypto_provider
+                    .cipher_suites
+                    .iter()
+                    .any(|candidate| u16::from(candidate.suite()) == suite_id)
+                {
+                    suites.push(rustls::CipherSuite::from(suite_id));
+                }
+            }
+            if !suites.is_empty() {
+                plan = plan.with_cipher_suites(ClientHelloCipherSuites::try_from(suites)?);
+
+                let mut supported_versions = Vec::new();
+                if context
+                    .crypto_provider
+                    .cipher_suites
+                    .iter()
+                    .any(|cs| cs.version().version == rustls::ProtocolVersion::TLSv1_3)
+                {
+                    supported_versions.push(rustls::ProtocolVersion::TLSv1_3);
+                }
+                if context
+                    .crypto_provider
+                    .cipher_suites
+                    .iter()
+                    .any(|cs| cs.version().version == rustls::ProtocolVersion::TLSv1_2)
+                {
+                    supported_versions.push(rustls::ProtocolVersion::TLSv1_2);
+                }
+                if !supported_versions.is_empty() {
+                    plan = plan.with_supported_versions(
+                        ClientHelloSupportedVersions::try_from(supported_versions)?,
+                    );
+                }
+            }
+        }
 
         if !profile_offers_tls13(self.profile) {
             plan = plan.with_session_id(parroted_session_id()?);

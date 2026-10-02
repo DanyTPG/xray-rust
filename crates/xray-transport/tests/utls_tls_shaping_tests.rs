@@ -66,6 +66,7 @@ mod utls_tls_shaping_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: alpn.iter().map(|value| (*value).to_owned()).collect(),
             fingerprint: Some(fingerprint.to_owned()),
+            cipher_suites: Vec::new(),
         }
     }
 
@@ -220,6 +221,47 @@ mod utls_tls_shaping_tests {
             cipher_suites(&hello),
             CHROME_PROVIDER_SUPPORTED_CIPHERS,
             "filtering must preserve the profile order and its leading GREASE slot"
+        );
+    }
+
+    #[test]
+    fn custom_cipher_suites_override_client_hello_suites() {
+        let mut conf = config("chrome", &[]);
+        conf.cipher_suites = vec!["TLS_CHACHA20_POLY1305_SHA256".to_owned()];
+
+        let hello = plain_tls_client_hello_bytes(&conf)
+            .expect("chrome ClientHello with custom cipherSuites must be produced");
+
+        let ciphers: Vec<u16> = cipher_suites(&hello)
+            .into_iter()
+            .filter(|&c| !is_grease(c))
+            .collect();
+        assert_eq!(
+            ciphers,
+            vec![0x1303],
+            "custom cipherSuites must override ClientHello cipher suites"
+        );
+    }
+
+    #[test]
+    fn custom_cipher_suites_order_is_preserved() {
+        let mut conf = config("chrome", &[]);
+        conf.cipher_suites = vec![
+            "TLS_CHACHA20_POLY1305_SHA256".to_owned(),
+            "TLS_AES_128_GCM_SHA256".to_owned(),
+        ];
+
+        let hello = plain_tls_client_hello_bytes(&conf)
+            .expect("chrome ClientHello with ordered cipherSuites must be produced");
+
+        let ciphers: Vec<u16> = cipher_suites(&hello)
+            .into_iter()
+            .filter(|&c| !is_grease(c))
+            .collect();
+        assert_eq!(
+            ciphers,
+            vec![0x1303, 0x1301],
+            "custom cipherSuites must preserve configured preference order"
         );
     }
 
@@ -405,6 +447,7 @@ mod utls_tls_shaping_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: Some("unsafe".to_owned()),
+            cipher_suites: Vec::new(),
         })
         .expect("unshaped ClientHello must be produced");
 
@@ -429,6 +472,7 @@ mod utls_tls_shaping_tests {
                 verify_peer_cert_by_name: Vec::new(),
                 alpn: vec!["h2".to_owned(), "http/1.1".to_owned()],
                 fingerprint: fingerprint.clone(),
+                cipher_suites: Vec::new(),
             })
             .expect("unshaped ClientHello must be produced");
 
@@ -455,6 +499,7 @@ mod utls_tls_shaping_tests {
                 verify_peer_cert_by_name: Vec::new(),
                 alpn: Vec::new(),
                 fingerprint: fingerprint.clone(),
+                cipher_suites: Vec::new(),
             })
             .expect("unshaped ClientHello must be produced");
 
@@ -903,6 +948,7 @@ mod utls_tls_shaping_tests {
                     verify_peer_cert_by_name: Vec::new(),
                     alpn: alpn.iter().map(|value| (*value).to_owned()).collect(),
                     fingerprint: Some(fingerprint.to_owned()),
+                    cipher_suites: Vec::new(),
                 })
                 .unwrap_or_else(|error| {
                     panic!("{fingerprint} (alpn {alpn:?}): IP-literal ClientHello: {error}")
@@ -1005,6 +1051,7 @@ mod utls_tls_shaping_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: Some("chrome".to_owned()),
+            cipher_suites: Vec::new(),
         };
 
         // Twice through the same connector. The second dial takes the memoized
@@ -1280,6 +1327,7 @@ mod utls_tls_shaping_tests {
             verify_peer_cert_by_name: Vec::new(),
             alpn: Vec::new(),
             fingerprint: Some(fingerprint.to_owned()),
+            cipher_suites: Vec::new(),
         };
 
         connector

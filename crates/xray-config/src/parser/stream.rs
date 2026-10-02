@@ -1031,6 +1031,8 @@ impl Parser<'_> {
                     })
                     .unwrap_or_default();
 
+                let cipher_suites = self.parse_tls_cipher_suites(tls_settings, index);
+
                 Some(StreamSecurity::Tls(TlsSettings {
                     server_name: tls_settings
                         .and_then(|settings| self.string_at(settings, "serverName"))
@@ -1040,6 +1042,7 @@ impl Parser<'_> {
                     verify_peer_cert_by_name,
                     allow_insecure,
                     alpn,
+                    cipher_suites,
                 }))
             }
             "reality" => self
@@ -1120,6 +1123,16 @@ impl Parser<'_> {
             self.error(
                 format!("{settings_path}.fingerprint"),
                 "tls fingerprint must be a string",
+            );
+        }
+
+        if settings
+            .get("cipherSuites")
+            .is_some_and(|ciphers| !ciphers.is_string() && !ciphers.is_null())
+        {
+            self.error(
+                format!("{settings_path}.cipherSuites"),
+                "tls cipherSuites must be a string or null",
             );
         }
 
@@ -1238,6 +1251,32 @@ impl Parser<'_> {
             names.push(name.to_owned());
         }
         names
+    }
+
+    pub(super) fn parse_tls_cipher_suites(
+        &mut self,
+        settings: Option<&Value>,
+        index: usize,
+    ) -> Vec<String> {
+        let path = format!("$.outbounds[{index}].streamSettings.tlsSettings.cipherSuites");
+        let Some(value) = settings.and_then(|settings| settings.get("cipherSuites")) else {
+            return Vec::new();
+        };
+        let encoded = match value {
+            Value::Null => return Vec::new(),
+            Value::String(encoded) => encoded,
+            _ => {
+                self.error(path, "field `cipherSuites` must be a string or null");
+                return Vec::new();
+            }
+        };
+
+        encoded
+            .split(':')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
     }
 
     pub(super) fn validate_tcp_settings(&mut self, stream: &Value, key: &str, index: usize) {

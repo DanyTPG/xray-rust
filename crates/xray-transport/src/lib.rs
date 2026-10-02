@@ -86,6 +86,8 @@ pub struct TlsClientConfig {
     /// mean no shaping; `None` is the value used by call sites that predate
     /// fingerprint support.
     pub fingerprint: Option<String>,
+    /// Colon-separated list of supported cipher suites from `tlsSettings.cipherSuites`.
+    pub cipher_suites: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]

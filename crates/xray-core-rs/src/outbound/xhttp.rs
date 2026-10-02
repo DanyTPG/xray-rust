@@ -32,6 +32,7 @@ pub(super) fn build_vless_connector(
                 verify_peer_cert_by_name: tls.verify_peer_cert_by_name.clone(),
                 alpn: tls.alpn.clone(),
                 fingerprint: tls.fingerprint.clone(),
+                cipher_suites: tls.cipher_suites.clone(),
             })
         }
         StreamSecurity::Reality(reality) => ConnectorConfig::Reality(RealityClientConfig {
