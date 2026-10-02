@@ -33,6 +33,7 @@ use std::{
     future::Future,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use thiserror::Error;
@@ -369,6 +370,13 @@ where
     #[cfg(unix)]
     let _ = raise_nofile_limit();
     let configured_inbounds = config.inbounds.clone();
+    let mut direct_matchers = Vec::new();
+    for rule in &config.routing.rules {
+        if rule.target.tag() == "direct" && !rule.domain_matchers.is_empty() {
+            direct_matchers.push(rule.domain_matchers.clone());
+        }
+    }
+    let direct_matchers = Arc::new(direct_matchers);
     let tun_fd_config = parse_tun_fd_env()?;
     let tun_runtime_options = parse_tun_runtime_options_env()?;
     let mut core = Core::with_tun_runtime_options(config, tun_runtime_options)?;
@@ -421,8 +429,24 @@ where
     }
 
     if let (Some(port), Some(socks)) = (dns_port, socks_addr) {
+        let domestic_dns = env::var("XRAY_DOMESTIC_DNS")
+            .ok()
+            .and_then(|s| parse_dns_endpoint(&s))
+            .unwrap_or_else(|| SocketAddr::from(([192, 168, 100, 1], 53)));
+
+        let remote_dns = env::var("XRAY_REMOTE_DNS")
+            .ok()
+            .and_then(|s| parse_dns_endpoint(&s))
+            .unwrap_or_else(|| SocketAddr::from(([8, 8, 8, 8], 53)));
+
         tokio::spawn(async move {
-            if let Err(e) = redir::start_dns_forwarder(port, socks).await {
+            if let Err(e) = redir::start_dns_forwarder(
+                port,
+                socks,
+                direct_matchers,
+                domestic_dns,
+                remote_dns,
+            ).await {
                 eprintln!("clean dns forwarder error: {e}");
             }
         });
@@ -435,6 +459,17 @@ where
     core.stop().await?;
 
     Ok(())
+}
+
+fn parse_dns_endpoint(s: &str) -> Option<SocketAddr> {
+    let s = s.trim();
+    if let Ok(addr) = s.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        return Some(SocketAddr::new(ip, 53));
+    }
+    None
 }
 
 pub async fn run_cli_with_shutdown<I, S, F>(args: I, shutdown: F) -> Result<(), CliError>

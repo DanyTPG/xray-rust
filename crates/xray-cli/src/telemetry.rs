@@ -80,8 +80,9 @@ pub fn generate_report(registry: &ConnectionRegistry) -> String {
         redir.redir_active_connections, redir.redir_total_accepted, redir.redir_total_closed
     ));
     out.push_str(&format!(
-        "Clean DNS (5335):  Active: {} | Total Queries: {}\n",
-        redir.dns_active_queries, redir.dns_total_queries
+        "Clean DNS (5335):  Active: {} | Total: {} (Domestic: {}, Remote: {}, Failovers: {})\n",
+        redir.dns_active_queries, redir.dns_total_queries,
+        redir.dns_domestic_queries, redir.dns_remote_queries, redir.dns_failover_queries
     ));
     out.push_str(&format!(
         "XHTTP H2 Pool:     Active Conn: {} | Total Dialed: {} | Closed: {} | Active Streams: {}\n",
