@@ -1,3 +1,4 @@
+pub mod alloc_tracker;
 mod config;
 pub mod redir;
 pub mod telemetry;

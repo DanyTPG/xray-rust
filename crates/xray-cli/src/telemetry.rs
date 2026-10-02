@@ -45,7 +45,9 @@ pub fn generate_report(registry: &ConnectionRegistry) -> String {
         .unwrap_or(0);
 
     let (vm_rss, rss_anon, vm_size) = read_proc_mem();
+    let (minflt, majflt) = read_page_faults();
     let fd_count = count_open_fds();
+    let heap = crate::alloc_tracker::alloc_telemetry();
 
     let redir = crate::redir::redir_telemetry();
     let xhttp = xray_core_rs::xhttp_telemetry();
@@ -56,8 +58,22 @@ pub fn generate_report(registry: &ConnectionRegistry) -> String {
     let mut out = String::with_capacity(2048);
     out.push_str("======================= XRAY-RUST LIVE TELEMETRY =======================\n");
     out.push_str(&format!(
-        "Memory: VmRSS: {} | RssAnon: {} | VmSize: {} | Open FDs: {}\n",
-        vm_rss, rss_anon, vm_size, fd_count
+        "Memory (OS):   VmRSS: {} | RssAnon: {} | VmSize: {} | FDs: {} | Faults: (min:{}, maj:{})\n",
+        vm_rss, rss_anon, vm_size, fd_count, minflt, majflt
+    ));
+    let live_heap_str = format_i64_bytes(heap.active_bytes);
+    let peak_heap_str = format_i64_bytes(heap.peak_bytes);
+    let small_str = format_i64_bytes(heap.small_bytes);
+    let med_str = format_i64_bytes(heap.medium_bytes);
+    let large_str = format_i64_bytes(heap.large_bytes);
+    let live_blocks = heap.alloc_count.saturating_sub(heap.dealloc_count);
+    out.push_str(&format!(
+        "Rust Heap:     Live: {} | Peak: {} | Active Blocks: {} ({} allocs, {} frees)\n",
+        live_heap_str, peak_heap_str, live_blocks, heap.alloc_count, heap.dealloc_count
+    ));
+    out.push_str(&format!(
+        "Heap Classes:  Small(<1K): {} | Medium(1-64K): {} | Large(>64K): {}\n",
+        small_str, med_str, large_str
     ));
     out.push_str(&format!(
         "Transparent Redir: Active: {} | Total Accepted: {} | Total Closed: {}\n",
@@ -143,4 +159,26 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+fn format_i64_bytes(bytes: i64) -> String {
+    if bytes < 0 {
+        format!("-{}", format_bytes((-bytes) as u64))
+    } else {
+        format_bytes(bytes as u64)
+    }
+}
+
+fn read_page_faults() -> (u64, u64) {
+    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
+        if let Some(after_paren) = stat.rfind(')') {
+            let fields: Vec<&str> = stat[after_paren + 1..].split_whitespace().collect();
+            if fields.len() > 9 {
+                let minflt = fields[7].parse().unwrap_or(0);
+                let majflt = fields[9].parse().unwrap_or(0);
+                return (minflt, majflt);
+            }
+        }
+    }
+    (0, 0)
 }

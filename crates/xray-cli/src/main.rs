@@ -1,3 +1,7 @@
+#[global_allocator]
+static GLOBAL: xray_cli::alloc_tracker::TrackingAllocator<mimalloc::MiMalloc> =
+    xray_cli::alloc_tracker::TrackingAllocator::new(mimalloc::MiMalloc);
+
 fn main() {
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     // Multiplexed transports share connection state. Extra workers add lock
